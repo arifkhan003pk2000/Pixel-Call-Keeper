@@ -27,10 +27,11 @@ class MainActivity : Activity() {
     private var playingName: String? = null
     private val handler = Handler(Looper.getMainLooper())
     private var statusView: TextView? = null
+    private var noteView: TextView? = null
     private var toggleBtn: Button? = null
 
     private val ticker = object : Runnable {
-        override fun run() { refreshHome(); handler.postDelayed(this, 1000) }
+        override fun run() { ensureService(); refreshHome(); handler.postDelayed(this, 1000) }
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -70,12 +71,19 @@ class MainActivity : Activity() {
         }
         root.addView(nav)
         setContentView(root)
+        if (!hasPerms()) askPerms()
         showHome()
     }
 
     override fun onResume() { super.onResume(); handler.post(ticker) }
     override fun onPause() { handler.removeCallbacks(ticker); super.onPause() }
     override fun onDestroy() { stopPlayback(); super.onDestroy() }
+
+    private fun ensureService() {
+        if (hasPerms() && !RecorderService.serviceUp) {
+            try { startForegroundService(Intent(this, RecorderService::class.java)) } catch (_: Exception) {}
+        }
+    }
 
     private fun screen(vararg views: View): ScrollView {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(24), dp(20), dp(20)) }
@@ -89,14 +97,21 @@ class MainActivity : Activity() {
     private fun showHome() {
         stopPlayback()
         statusView = tv("", 18f, accent, true)
-        toggleBtn = btn("Recording shuru karein") { toggleRecording() }
+        noteView = tv("", 14f, Color.parseColor("#FFB74D"))
+        toggleBtn = btn("Recording shuru karein") { RecorderService.toggleManual() }
+        val sw = Switch(this).apply {
+            text = "Auto-record (call par khud shuru)"
+            setTextColor(Color.WHITE)
+            isChecked = RecorderService.auto
+            setOnCheckedChangeListener { _, c -> RecorderService.setAuto(this@MainActivity, c) }
+            setPadding(dp(4), dp(14), dp(4), dp(14))
+        }
         screen(
             tv("PixelCall Keeper", 30f, Color.WHITE, true),
             tv("Private recordings, aapke phone par", 15f, Color.LTGRAY),
-            statusView!!,
-            toggleBtn!!,
-            tv("Call ke waqt: call shuru karein, SPEAKER ON karein, phir yahan Recording shuru dabayein. " +
-               "Phone ka mic dono taraf ki awaaz pakadta hai.", 14f, Color.LTGRAY)
+            statusView!!, noteView!!, sw, toggleBtn!!,
+            tv("Helper pehle Setup ke mutabiq USB se chalana hota hai. " +
+               "Uske baad call shuru hote hi recording khud shuru ho jayegi.", 14f, Color.LTGRAY)
         )
         refreshHome()
     }
@@ -104,22 +119,21 @@ class MainActivity : Activity() {
     private fun refreshHome() {
         val s = statusView ?: return
         val b = toggleBtn ?: return
-        if (RecorderService.running) {
+        if (RecorderService.recording) {
             val sec = (System.currentTimeMillis() - RecorderService.startedAt) / 1000
             s.text = "Recording chal rahi hai: %02d:%02d".format(sec / 60, sec % 60)
             b.text = "Recording band karein"
+            b.isEnabled = true
         } else {
-            s.text = RecorderService.lastError?.let { "Error: $it" } ?: "Taiyar"
+            s.text = when {
+                !RecorderService.serviceUp -> "Service band hai (microphone permission dein)"
+                RecorderService.helperConnected -> "Taiyar: helper connected"
+                else -> "Helper connected nahi. Setup mein command dekhein."
+            }
             b.text = "Recording shuru karein"
+            b.isEnabled = RecorderService.helperConnected
         }
-    }
-
-    private fun toggleRecording() {
-        if (RecorderService.running) {
-            stopService(Intent(this, RecorderService::class.java))
-        } else if (hasPerms()) {
-            startForegroundService(Intent(this, RecorderService::class.java))
-        } else askPerms()
+        noteView?.text = RecorderService.lastError?.let { "Note: $it" } ?: ""
     }
 
     private fun hasPerms() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -132,7 +146,7 @@ class MainActivity : Activity() {
 
     // ---------- Recordings ----------
     private fun showRecordings() {
-        val files = RecorderService.dir(this).listFiles { f -> f.extension == "m4a" }
+        val files = RecorderService.dir(this).listFiles { f -> f.extension == "wav" || f.extension == "m4a" }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
         val views = mutableListOf<View>(tv("Recordings", 28f, Color.WHITE, true))
         if (files.isEmpty()) views += tv("Abhi koi recording nahi hai.", 15f, Color.LTGRAY)
@@ -183,6 +197,9 @@ class MainActivity : Activity() {
     // ---------- Setup ----------
     private fun showSetup() {
         stopPlayback()
+        val cmd = tv("adb shell \"CLASSPATH=\$(pm path com.pixelcallkeeper | cut -d: -f2) " +
+            "nohup setsid app_process / com.pixelcallkeeper.Helper >/data/local/tmp/pck.log 2>&1 &\"",
+            13f, accent).apply { setTextIsSelectable(true) }
         screen(
             tv("Setup", 28f, Color.WHITE, true),
             tv("Microphone: " + if (hasPerms()) "Allowed" else "Allow nahi hai", 16f, accent, true),
@@ -190,17 +207,21 @@ class MainActivity : Activity() {
             btn("App settings kholen") {
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             },
-            tv("Zaroori:\n" +
-               "1) App settings > Battery > Unrestricted karein.\n" +
-               "2) Call ke dauran SPEAKER ON rakhein.\n" +
-               "3) Agar recording khali (silent) aaye, to Android mic ko call ke dauran block kar raha hai. " +
-               "Mujhe bata dein, agla version helper wala tareeqa use karega.\n" +
-               "4) Samne wale ki ijazat ke bina call record na karein.", 14f, Color.LTGRAY)
+            tv("Helper chalane ka tareeqa (har restart ke baad ek baar):", 15f, Color.WHITE, true),
+            tv("1) Phone USB se computer se jodein, USB debugging ON rakhein.\n" +
+               "2) App kholein (Home par 'Helper connected nahi' dikhega).\n" +
+               "3) Computer par platform-tools folder mein cmd kholein aur ye command chalayein:", 14f, Color.LTGRAY),
+            cmd,
+            tv("4) Kuch second mein Home par 'Taiyar: helper connected' aa jayega. USB hata sakte hain.\n" +
+               "5) Battery > Unrestricted zaroor karein.\n" +
+               "6) Samne wale ki ijazat ke bina call record na karein.", 14f, Color.LTGRAY),
+            btn("Service band karein") { RecorderService.stopAll() }
         )
     }
 
     override fun onRequestPermissionsResult(rc: Int, p: Array<out String>, r: IntArray) {
         super.onRequestPermissionsResult(rc, p, r)
-        showSetup()
+        ensureService()
+        showHome()
     }
 }
