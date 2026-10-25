@@ -1,9 +1,12 @@
 package com.pixelcallkeeper
 
+import android.app.Application
 import android.content.Context
+import android.content.ContextWrapper
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.os.Looper
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
@@ -13,23 +16,55 @@ object Helper {
     fun main(args: Array<String>) {
         val seconds = args.firstOrNull()?.toIntOrNull() ?: 6
         try { Looper.prepareMainLooper() } catch (_: Throwable) {}
-        val ctx = systemContext()
-        println("Helper shuru. Har source ke liye $seconds second. Call chalti rakhein aur baat karte rahein.")
+        val ctx = fakeContext()
+        println("Helper v2 shuru. Har source ke liye $seconds second. Call chalti rakhein aur baat karte rahein.")
         val sources = listOf(
-            4 to "VOICE_CALL", 3 to "VOICE_DOWNLINK", 2 to "VOICE_UPLINK",
-            7 to "VOICE_COMMUNICATION", 6 to "VOICE_RECOGNITION", 1 to "MIC", 8 to "REMOTE_SUBMIX"
+            1 to "MIC", 4 to "VOICE_CALL", 3 to "VOICE_DOWNLINK", 2 to "VOICE_UPLINK",
+            7 to "VOICE_COMMUNICATION", 6 to "VOICE_RECOGNITION", 8 to "REMOTE_SUBMIX"
         )
         for ((src, name) in sources) test(ctx, src, name, seconds)
         println("Khatam.")
         System.exit(0)
     }
 
-    private fun systemContext(): Context? = try {
-        val at = Class.forName("android.app.ActivityThread")
-        val t = at.getMethod("systemMain").invoke(null)
-        at.getMethod("getSystemContext").invoke(t) as Context
-    } catch (e: Throwable) {
-        println("Context nahi mila: $e"); null
+    private fun setField(obj: Any, cls: Class<*>, name: String, value: Any?): Boolean {
+        return try {
+            val f = cls.getDeclaredField(name)
+            f.isAccessible = true
+            f.set(obj, value)
+            true
+        } catch (e: Throwable) {
+            println("field $name set nahi hua: ${e.javaClass.simpleName}")
+            false
+        }
+    }
+
+    private fun fakeContext(): Context? {
+        return try {
+            val atClass = Class.forName("android.app.ActivityThread")
+            val thread = atClass.getMethod("systemMain").invoke(null)!!
+            val sys = atClass.getMethod("getSystemContext").invoke(thread) as Context
+            val implClass = Class.forName("android.app.ContextImpl")
+            val shell = "com.android.shell"
+            setField(sys, implClass, "mOpPackageName", shell)
+            setField(sys, implClass, "mBasePackageName", shell)
+            try {
+                val bClass = Class.forName("android.content.AttributionSource\$Builder")
+                val b = bClass.getConstructor(Int::class.javaPrimitiveType).newInstance(2000)
+                bClass.getMethod("setPackageName", String::class.java).invoke(b, shell)
+                val src = bClass.getMethod("build").invoke(b)
+                setField(sys, implClass, "mAttributionSource", src)
+            } catch (e: Throwable) {
+                println("AttributionSource: $e")
+            }
+            val app = Application()
+            setField(app, ContextWrapper::class.java, "mBase", sys)
+            setField(thread, atClass, "mInitialApplication", app)
+            sys
+        } catch (e: Throwable) {
+            println("Context nahi bana: $e")
+            null
+        }
     }
 
     private fun make(ctx: Context?, src: Int, rate: Int, buf: Int): AudioRecord {
@@ -62,7 +97,7 @@ object Helper {
                 return
             }
             r.startRecording()
-            val out = java.io.ByteArrayOutputStream()
+            val out = ByteArrayOutputStream()
             val data = ByteArray(4096)
             var peak = 0
             var err = 0
@@ -84,7 +119,7 @@ object Helper {
             writeWav(f, pcm, rate)
             println("$name: peak=$peak bytes=${pcm.size} readError=$err -> ${f.name}")
         } catch (e: Throwable) {
-            println("$name: ERROR $e")
+            println("$name: ERROR $e ${e.cause ?: ""}")
         } finally {
             try { rec?.release() } catch (_: Throwable) {}
         }
