@@ -9,8 +9,16 @@ android {
         applicationId = "com.pixelcallkeeper"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
+    }
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
