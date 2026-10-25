@@ -12,6 +12,7 @@ import java.io.BufferedReader
 import java.io.DataOutputStream
 import java.io.InputStreamReader
 import java.net.Socket
+import kotlin.math.abs
 
 object Helper {
     private const val PORT = 38355
@@ -22,7 +23,7 @@ object Helper {
     fun main(args: Array<String>) {
         try { Looper.prepareMainLooper() } catch (_: Throwable) {}
         val ctx = fakeContext()
-        println("Helper v3 chalu. App se connection ka intezar...")
+        println("Helper v5 chalu. App se connection ka intezar...")
         while (true) {
             try {
                 Socket("127.0.0.1", PORT).use { s -> serve(ctx, s) }
@@ -53,7 +54,92 @@ object Helper {
         recording = false
     }
 
+    private fun readFull(r: AudioRecord, buf: ByteArray, n: Int): Int {
+        var off = 0
+        while (off < n && recording) {
+            val k = r.read(buf, off, n - off)
+            if (k < 0) return -1
+            if (k == 0) { Thread.sleep(5); continue }
+            off += k
+        }
+        return off
+    }
+
+    private fun tryStart(ctx: Context?, src: Int, rate: Int, buf: Int, name: String): AudioRecord? {
+        return try {
+            val r = make(ctx, src, rate, buf)
+            if (r.state != AudioRecord.STATE_INITIALIZED) {
+                println("$name: init fail"); r.release(); null
+            } else {
+                r.startRecording(); println("$name: chalu"); r
+            }
+        } catch (e: Throwable) {
+            println("$name: error $e"); null
+        }
+    }
+
+    private fun sampleAt(b: ByteArray, i: Int): Int =
+        ((b[i + 1].toInt() shl 8) or (b[i].toInt() and 0xFF)).toShort().toInt()
+
+    private fun captureVoip(ctx: Context?, out: DataOutputStream, useMic: Boolean) {
+        val rate = 16000
+        val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val bufSize = maxOf(min, rate * 2)
+        var sub: AudioRecord? = null
+        var mic: AudioRecord? = null
+        try {
+            sub = tryStart(ctx, 8, rate, bufSize, "REMOTE_SUBMIX")
+            mic = if (useMic) tryStart(ctx, 1, rate, bufSize, "MIC") else null
+            if (sub == null && mic == null) throw IllegalStateException("koi source start nahi hua")
+            val n = 1600
+            val a = ByteArray(n)
+            val b = ByteArray(n)
+            val mix = ByteArray(n)
+            var peakS = 0
+            var peakM = 0
+            var last = System.currentTimeMillis()
+            while (recording) {
+                java.util.Arrays.fill(a, 0)
+                java.util.Arrays.fill(b, 0)
+                val s0 = sub
+                if (s0 != null) { val k = readFull(s0, a, n); if (k < 0) { try { s0.release() } catch (_: Throwable) {}; sub = null } }
+                val m0 = mic
+                if (m0 != null) { val k = readFull(m0, b, n); if (k < 0) { try { m0.release() } catch (_: Throwable) {}; mic = null } }
+                if (!recording) break
+                var i = 0
+                while (i + 1 < n) {
+                    val x = sampleAt(a, i)
+                    val y = sampleAt(b, i)
+                    if (abs(x) > peakS) peakS = abs(x)
+                    if (abs(y) > peakM) peakM = abs(y)
+                    val m = (x + y).coerceIn(-32768, 32767)
+                    mix[i] = (m and 0xFF).toByte()
+                    mix[i + 1] = ((m shr 8) and 0xFF).toByte()
+                    i += 2
+                }
+                synchronized(out) { out.writeShort(n); out.write(mix, 0, n); out.flush() }
+                val now = System.currentTimeMillis()
+                if (now - last >= 2000) {
+                    println("VoIP peak: submix=$peakS mic=$peakM")
+                    peakS = 0; peakM = 0; last = now
+                }
+                if (sub == null && mic == null) break
+            }
+        } catch (e: Throwable) {
+            println("voip capture error: $e")
+        } finally {
+            try { sub?.stop() } catch (_: Throwable) {}
+            try { mic?.stop() } catch (_: Throwable) {}
+            try { sub?.release() } catch (_: Throwable) {}
+            try { mic?.release() } catch (_: Throwable) {}
+            recording = false
+            try { synchronized(out) { out.writeShort(0); out.flush() } } catch (_: Throwable) {}
+        }
+    }
+
     private fun capture(ctx: Context?, src: Int, out: DataOutputStream) {
+        if (src == 7) { captureVoip(ctx, out, true); return }
+        if (src == 9) { captureVoip(ctx, out, false); return }
         var rec: AudioRecord? = null
         try {
             val rate = 16000

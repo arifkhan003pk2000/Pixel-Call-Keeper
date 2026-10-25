@@ -50,6 +50,8 @@ class MainActivity : Activity() {
     private var statusView: TextView? = null
     private var noteView: TextView? = null
     private var toggleBtn: Button? = null
+    private var voipBtn: Button? = null
+    private var bothBtn: Button? = null
 
     private val ticker = object : Runnable {
         override fun run() { ensureService(); refreshHome(); handler.postDelayed(this, 1000) }
@@ -164,7 +166,9 @@ class MainActivity : Activity() {
         tab = "home"
         statusView = tv("", 18f, accent, true)
         noteView = tv("", 14f, Color.parseColor("#FFB74D"))
-        toggleBtn = btn("Recording shuru karein") { RecorderService.toggleManual() }
+        toggleBtn = btn("Phone call record (manual)") { RecorderService.toggleManual(4) }
+        voipBtn = btn("WhatsApp: sirf samne wale ki awaaz (safe)") { RecorderService.toggleManual(9) }
+        bothBtn = btn("WhatsApp: dono awaaz (call kharab ho sakti hai)") { RecorderService.toggleManual(7) }
         val sw = Switch(this).apply {
             text = "Auto-record (call par khud shuru)"
             setTextColor(Color.WHITE)
@@ -175,9 +179,9 @@ class MainActivity : Activity() {
         screen(
             tv("PixelCall Keeper", 30f, Color.WHITE, true),
             tv("Private recordings, aapke phone par", 15f, Color.LTGRAY),
-            statusView!!, noteView!!, sw, toggleBtn!!,
+            statusView!!, noteView!!, sw, toggleBtn!!, voipBtn!!, bothBtn!!,
             tv("Helper pehle Setup ke mutabiq USB se chalana hota hai. " +
-               "Uske baad call shuru hote hi recording khud shuru ho jayegi.", 14f, Color.LTGRAY)
+               "Normal phone call par recording khud shuru hoti hai. WhatsApp / Instagram par sirf manual button se.", 14f, Color.LTGRAY)
         )
         refreshHome()
     }
@@ -190,14 +194,22 @@ class MainActivity : Activity() {
             s.text = "Recording chal rahi hai: %02d:%02d".format(sec / 60, sec % 60)
             b.text = "Recording band karein"
             b.isEnabled = true
+            voipBtn?.text = "Recording band karein"
+            voipBtn?.isEnabled = true
+            bothBtn?.text = "Recording band karein"
+            bothBtn?.isEnabled = true
         } else {
             s.text = when {
                 !RecorderService.serviceUp -> "Service band hai (microphone permission dein)"
                 RecorderService.helperConnected -> "Taiyar: helper connected"
                 else -> "Helper connected nahi. Setup mein command dekhein."
             }
-            b.text = "Recording shuru karein"
+            b.text = "Phone call record (manual)"
             b.isEnabled = RecorderService.helperConnected
+            voipBtn?.text = "WhatsApp: sirf samne wale ki awaaz (safe)"
+            voipBtn?.isEnabled = RecorderService.helperConnected
+            bothBtn?.text = "WhatsApp: dono awaaz (call kharab ho sakti hai)"
+            bothBtn?.isEnabled = RecorderService.helperConnected
         }
         noteView?.text = RecorderService.lastError?.let { "Note: $it" } ?: ""
     }

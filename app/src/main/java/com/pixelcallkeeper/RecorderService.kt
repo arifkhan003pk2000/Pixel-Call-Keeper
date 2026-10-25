@@ -51,7 +51,7 @@ class RecorderService : Service() {
             ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("auto", v).apply()
         }
 
-        fun toggleManual() { instance?.manualToggle() }
+        fun toggleManual(source: Int = 4) { instance?.manualToggle(source) }
         fun stopAll() { instance?.stopSelf() }
     }
 
@@ -171,9 +171,9 @@ class RecorderService : Service() {
         send("X")
     }
 
-    fun manualToggle() {
+    fun manualToggle(source: Int) {
         if (recording) { manual = false; stopRec() }
-        else { manual = true; startRec(4) }
+        else { manual = true; startRec(source) }
     }
 
     private fun finalizeFile() {
@@ -289,12 +289,21 @@ class RecorderService : Service() {
         var quiet = 0
         while (serviceUp) {
             try { Thread.sleep(1000) } catch (_: Exception) {}
-            if (!auto || manual) continue
             val m = am.mode
             val inCall = m == AudioManager.MODE_IN_CALL || m == AudioManager.MODE_IN_COMMUNICATION
-            if (inCall) {
+            if (manual) {
+                // WhatsApp/Instagram manual recording: call khatam hone par khud band
+                if (recording && curSource != 4 && !inCall) {
+                    quiet++
+                    if (quiet >= 10) { quiet = 0; stopRec() }
+                } else quiet = 0
+                continue
+            }
+            if (!auto) continue
+            // Auto sirf normal phone call par. WhatsApp/Instagram par mic kabhi khud nahi chhuta.
+            if (m == AudioManager.MODE_IN_CALL) {
                 quiet = 0
-                if (!recording && helperConnected) startRec(if (m == AudioManager.MODE_IN_CALL) 4 else 7)
+                if (!recording && helperConnected) startRec(4)
             } else if (recording) {
                 quiet++
                 if (quiet >= 3) { quiet = 0; stopRec() }
