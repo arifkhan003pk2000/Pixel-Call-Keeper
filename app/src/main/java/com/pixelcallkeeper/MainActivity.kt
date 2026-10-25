@@ -88,7 +88,7 @@ class MainActivity : Activity() {
     // ---------- Home ----------
     private fun showHome() {
         stopPlayback()
-        statusView = tv("", 18, accent, true)
+        statusView = tv("", 18f, accent, true)
         toggleBtn = btn("Recording shuru karein") { toggleRecording() }
         screen(
             tv("PixelCall Keeper", 30f, Color.WHITE, true),
