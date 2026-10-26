@@ -3,5 +3,4 @@
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:notificationTimeout="500"
-    android:canRetrieveWindowContent="false"
-    android:description="WhatsApp aur Instagram calls ki recording ke waqt mic ko chalu rakhta hai. Ye screen ka koi data nahi padhta." />
+    android:canRetrieveWindowContent="false" />
