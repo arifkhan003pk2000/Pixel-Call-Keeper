@@ -11,6 +11,8 @@ import java.io.BufferedOutputStream
 import java.io.BufferedReader
 import java.io.DataOutputStream
 import java.io.InputStreamReader
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.net.Socket
 import kotlin.math.abs
 
@@ -18,12 +20,19 @@ object Helper {
     private const val PORT = 38355
     @Volatile private var recording = false
     private var recThread: Thread? = null
+    private var lock: ServerSocket? = null
 
     @JvmStatic
     fun main(args: Array<String>) {
+        try {
+            lock = ServerSocket(38356, 1, InetAddress.getByName("127.0.0.1"))
+        } catch (_: Throwable) {
+            println("Dusra helper pehle se chal raha hai. Ye band ho raha hai.")
+            System.exit(0)
+        }
         try { Looper.prepareMainLooper() } catch (_: Throwable) {}
         val ctx = fakeContext()
-        println("Helper v5 chalu. App se connection ka intezar...")
+        println("Helper v6 chalu. App se connection ka intezar...")
         while (true) {
             try {
                 Socket("127.0.0.1", PORT).use { s -> serve(ctx, s) }

@@ -188,9 +188,9 @@ class RecorderService : Service() {
             val f = curFile
             curFile = null
             if (f != null) {
-                if (pcmBytes < 3200) {
+                if (pcmBytes < 64000) {
                     f.delete()
-                    if (lastError == null) lastError = "Recording khali rahi (helper audio nahi de paya)"
+                    if (pcmBytes < 3200 && lastError == null) lastError = "Recording khali rahi (helper audio nahi de paya)"
                 } else {
                     writeHeader(f, pcmBytes)
                     doneFile = f
@@ -287,12 +287,12 @@ class RecorderService : Service() {
     private fun monitor() {
         val am = getSystemService(AudioManager::class.java)
         var quiet = 0
+        var onCall = 0
         while (serviceUp) {
             try { Thread.sleep(1000) } catch (_: Exception) {}
             val m = am.mode
             val inCall = m == AudioManager.MODE_IN_CALL || m == AudioManager.MODE_IN_COMMUNICATION
             if (manual) {
-                // WhatsApp/Instagram manual recording: call khatam hone par khud band
                 if (recording && curSource != 4 && !inCall) {
                     quiet++
                     if (quiet >= 10) { quiet = 0; stopRec() }
@@ -300,14 +300,17 @@ class RecorderService : Service() {
                 continue
             }
             if (!auto) continue
-            // Auto sirf normal phone call par. WhatsApp/Instagram par mic kabhi khud nahi chhuta.
             if (m == AudioManager.MODE_IN_CALL) {
                 quiet = 0
-                if (!recording && helperConnected) startRec(4)
-            } else if (recording) {
-                quiet++
-                if (quiet >= 3) { quiet = 0; stopRec() }
-            } else quiet = 0
+                onCall++
+                if (!recording && helperConnected && onCall >= 2) startRec(4)
+            } else {
+                onCall = 0
+                if (recording) {
+                    quiet++
+                    if (quiet >= 5) { quiet = 0; stopRec() }
+                } else quiet = 0
+            }
         }
     }
 
