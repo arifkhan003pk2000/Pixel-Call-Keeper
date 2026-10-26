@@ -305,7 +305,7 @@ class MainActivity : Activity() {
         }
         b.alpha = if (b.isEnabled) 1f else 0.45f
         v?.alpha = if (v?.isEnabled == true) 1f else 0.45f
-        noteView?.text = RecorderService.lastError?.let { "Note: $it" } ?: ""
+        noteView?.text = listOfNotNull(RecorderService.lastError?.let { "Note: $it" }, RecorderService.info).joinToString("\n")
         waView?.text = if (PckAccessibilityService.connected)
             "WhatsApp / Instagram: taiyar (speaker ON rakhein)"
         else "WhatsApp / Instagram: Setup mein Accessibility ON karein"
