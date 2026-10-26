@@ -9,7 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Environment
 import android.os.IBinder
@@ -65,6 +68,8 @@ class RecorderService : Service() {
     private var curStart = 0L
     private var pcmBytes = 0L
     @Volatile private var manual = false
+    @Volatile private var localRun = false
+    private var localThread: Thread? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -142,9 +147,8 @@ class RecorderService : Service() {
         }
     }
 
-    private fun startRec(source: Int) {
-        if (!helperConnected || recording) return
-        synchronized(fileLock) {
+    private fun openNewFile(source: Int): Boolean {
+        return synchronized(fileLock) {
             try {
                 val name = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date()) + ".wav"
                 val tmp = File(dir(this), "_new").apply { mkdirs() }
@@ -156,24 +160,75 @@ class RecorderService : Service() {
                 curSource = source
                 curStart = System.currentTimeMillis()
                 pcmBytes = 0
+                true
             } catch (e: Exception) {
                 lastError = "File: ${e.message}"
-                return
+                false
             }
         }
+    }
+
+    private fun startRec(source: Int) {
+        if (!helperConnected || recording) return
+        if (!openNewFile(source)) return
         recording = true
         startedAt = System.currentTimeMillis()
         send("S$source")
     }
 
+    // WhatsApp / Instagram: app ke andar se mic (Accessibility ON ho tabhi)
+    private fun startRecLocal() {
+        if (recording) return
+        if (!PckAccessibilityService.connected) {
+            lastError = "Pehle Setup mein Accessibility ON karein"
+            return
+        }
+        if (!openNewFile(7)) return
+        recording = true
+        startedAt = System.currentTimeMillis()
+        localRun = true
+        val t = Thread {
+            var ar: AudioRecord? = null
+            try {
+                val rate = 16000
+                val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+                ar = AudioRecord(
+                    MediaRecorder.AudioSource.MIC, rate,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                    maxOf(min, rate * 2)
+                )
+                if (ar.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("mic start nahi hua")
+                ar.startRecording()
+                val buf = ByteArray(3200)
+                while (localRun) {
+                    val n = ar.read(buf, 0, buf.size)
+                    if (n > 0) {
+                        synchronized(fileLock) { fos?.write(buf, 0, n); pcmBytes += n }
+                    } else if (n < 0) break
+                }
+                ar.stop()
+            } catch (e: Exception) {
+                lastError = "VoIP: ${e.message}"
+            } finally {
+                try { ar?.release() } catch (_: Exception) {}
+                localRun = false
+                finalizeFile()
+            }
+        }
+        localThread = t
+        t.start()
+    }
+
     private fun stopRec() {
         if (!recording) return
-        send("X")
+        if (localRun) localRun = false else send("X")
     }
 
     fun manualToggle(source: Int) {
-        if (recording) { manual = false; stopRec() }
-        else { manual = true; startRec(source) }
+        if (recording) { manual = false; stopRec(); return }
+        manual = true
+        if (source == 7) startRecLocal() else startRec(source)
+        if (!recording) manual = false
     }
 
     private fun finalizeFile() {
@@ -291,19 +346,24 @@ class RecorderService : Service() {
         while (serviceUp) {
             try { Thread.sleep(1000) } catch (_: Exception) {}
             val m = am.mode
-            val inCall = m == AudioManager.MODE_IN_CALL || m == AudioManager.MODE_IN_COMMUNICATION
+            val phone = m == AudioManager.MODE_IN_CALL
+            val voip = m == AudioManager.MODE_IN_COMMUNICATION && PckAccessibilityService.connected
+            val anyCall = m == AudioManager.MODE_IN_CALL || m == AudioManager.MODE_IN_COMMUNICATION
             if (manual) {
-                if (recording && curSource != 4 && !inCall) {
+                if (recording && curSource != 4 && !anyCall) {
                     quiet++
                     if (quiet >= 10) { quiet = 0; stopRec() }
                 } else quiet = 0
                 continue
             }
             if (!auto) continue
-            if (m == AudioManager.MODE_IN_CALL) {
+            if (phone || voip) {
                 quiet = 0
                 onCall++
-                if (!recording && helperConnected && onCall >= 2) startRec(4)
+                if (!recording && onCall >= 2) {
+                    if (phone && helperConnected) startRec(4)
+                    else if (voip) startRecLocal()
+                }
             } else {
                 onCall = 0
                 if (recording) {
@@ -316,6 +376,7 @@ class RecorderService : Service() {
 
     override fun onDestroy() {
         serviceUp = false
+        localRun = false
         try { server?.close() } catch (_: Exception) {}
         try { client?.close() } catch (_: Exception) {}
         finalizeFile()

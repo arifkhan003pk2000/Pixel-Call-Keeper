@@ -4,9 +4,13 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.MediaPlayer
 import android.media.PlaybackParams
 import android.net.Uri
@@ -29,9 +33,17 @@ private data class Person(val label: String, val dir: File, val legacy: Boolean)
 
 class MainActivity : Activity() {
 
-    private val bg = Color.parseColor("#0B0F1A")
-    private val accent = Color.parseColor("#22C5F0")
+    private val cBg = Color.parseColor("#0B0F1A")
+    private val cCard = Color.parseColor("#151B2E")
+    private val cCard2 = Color.parseColor("#1F2742")
+    private val cCyan = Color.parseColor("#22D3EE")
+    private val cPurple = Color.parseColor("#A66BFF")
+    private val cMuted = Color.parseColor("#9AA3B8")
+    private val cGreen = Color.parseColor("#34D399")
+    private val cOrange = Color.parseColor("#FBBF24")
+    private val cRed = Color.parseColor("#F87171")
     private val audioExt = setOf("wav", "m4a")
+
     private lateinit var content: FrameLayout
     private lateinit var playerBar: LinearLayout
     private lateinit var seek: SeekBar
@@ -39,6 +51,7 @@ class MainActivity : Activity() {
     private lateinit var titleView: TextView
     private lateinit var playBtn: Button
     private lateinit var speedBtn: Button
+    private val navButtons = mutableMapOf<String, Button>()
     private var player: MediaPlayer? = null
     private var playingFile: File? = null
     private var speed = 1.0f
@@ -49,7 +62,10 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var statusView: TextView? = null
     private var noteView: TextView? = null
+    private var waView: TextView? = null
+    private var dotView: View? = null
     private var toggleBtn: Button? = null
+    private var voipBtn: Button? = null
 
     private val ticker = object : Runnable {
         override fun run() { ensureService(); refreshHome(); handler.postDelayed(this, 1000) }
@@ -61,34 +77,79 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------- style helpers ----------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun roundBg(color: Int, r: Int = 16) =
+        GradientDrawable().apply { setColor(color); cornerRadius = dp(r).toFloat() }
+
+    private fun gradBg(r: Int = 16) =
+        GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(cCyan, cPurple))
+            .apply { cornerRadius = dp(r).toFloat() }
 
     private fun tv(t: String, size: Float = 16f, color: Int = Color.WHITE, bold: Boolean = false) =
         TextView(this).apply {
             text = t; textSize = size; setTextColor(color)
-            if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(dp(4), dp(6), dp(4), dp(6))
+            if (bold) setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
 
     private fun btn(t: String, onClick: () -> Unit) = Button(this).apply {
-        text = t; isAllCaps = false; setTextColor(Color.BLACK)
-        setBackgroundColor(accent)
+        text = t; isAllCaps = false; setTextColor(Color.WHITE); textSize = 16f
+        setTypeface(typeface, Typeface.BOLD)
+        background = gradBg(16); stateListAnimator = null
         setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(10) }
+        layoutParams = LinearLayout.LayoutParams(-1, dp(54)).apply { topMargin = dp(10) }
+    }
+
+    private fun ghostBtn(t: String, onClick: () -> Unit) = Button(this).apply {
+        text = t; isAllCaps = false; setTextColor(Color.WHITE); textSize = 15f
+        background = roundBg(cCard2, 16); stateListAnimator = null
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(10) }
+    }
+
+    private fun listBtn(t: String, onClick: () -> Unit) = Button(this).apply {
+        text = t; isAllCaps = false; setTextColor(Color.WHITE); textSize = 15f
+        gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        background = roundBg(cCard, 16); stateListAnimator = null
+        setPadding(dp(16), dp(10), dp(16), dp(10))
+        minHeight = dp(60)
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
     }
 
     private fun smallBtn(t: String, onClick: () -> Unit) = Button(this).apply {
-        text = t; isAllCaps = false; textSize = 12f
+        text = t; isAllCaps = false; textSize = 12f; setTextColor(Color.WHITE)
+        background = roundBg(cCard2, 12); stateListAnimator = null
         setPadding(0, 0, 0, 0)
         setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginStart = dp(2); marginEnd = dp(2) }
+        layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(3); marginEnd = dp(3) }
     }
 
+    private fun card(vararg views: View): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundBg(cCard, 20)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
+            views.forEach { addView(it) }
+        }
+
+    private fun setTab(t: String) {
+        tab = t
+        navButtons.forEach { (k, b) ->
+            if (k == t) { b.background = gradBg(14); b.setTextColor(Color.WHITE) }
+            else { b.background = roundBg(Color.TRANSPARENT, 14); b.setTextColor(cMuted) }
+        }
+    }
+
+    // ---------- lifecycle ----------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bg)
+            setBackgroundColor(cBg)
             setOnApplyWindowInsetsListener { v, ins ->
                 @Suppress("DEPRECATION")
                 v.setPadding(0, ins.systemWindowInsetTop, 0, ins.systemWindowInsetBottom); ins
@@ -100,12 +161,15 @@ class MainActivity : Activity() {
         // ----- player bar -----
         playerBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#151B2B"))
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = roundBg(cCard, 20)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
             visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(8), 0, dp(8), dp(4)) }
         }
-        titleView = tv("", 13f, Color.LTGRAY)
+        titleView = tv("", 13f, cMuted)
         seek = SeekBar(this)
+        seek.progressTintList = ColorStateList.valueOf(cCyan)
+        seek.thumbTintList = ColorStateList.valueOf(cCyan)
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
                 if (fromUser) { try { player?.seekTo(p) } catch (_: Exception) {}; updatePos() }
@@ -126,12 +190,24 @@ class MainActivity : Activity() {
         playerBar.addView(titleView); playerBar.addView(seek); playerBar.addView(posView); playerBar.addView(ctl)
         root.addView(playerBar)
 
-        val nav = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(8), dp(8), dp(8), dp(8)) }
-        listOf("Home" to ::showHome, "Recordings" to ::showRecordings, "Setup" to ::showSetup).forEach { (name, f) ->
-            nav.addView(Button(this).apply {
-                text = name; isAllCaps = false
-                setOnClickListener { f() }
-            }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { marginStart = dp(4); marginEnd = dp(4) })
+        // ----- bottom nav -----
+        val nav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = roundBg(cCard, 0)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        val items = listOf<Triple<String, String, () -> Unit>>(
+            Triple("home", "🏠  Home", { showHome() }),
+            Triple("rec", "🎙  Recordings", { showRecordings() }),
+            Triple("setup", "⚙  Setup", { showSetup() })
+        )
+        items.forEach { (key, label, act) ->
+            val b = Button(this).apply {
+                text = label; isAllCaps = false; textSize = 13f; stateListAnimator = null
+                setOnClickListener { act() }
+            }
+            navButtons[key] = b
+            nav.addView(b, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginStart = dp(3); marginEnd = dp(3) })
         }
         root.addView(nav)
         setContentView(root)
@@ -143,6 +219,16 @@ class MainActivity : Activity() {
     override fun onPause() { handler.removeCallbacks(ticker); super.onPause() }
     override fun onDestroy() { stopPlayback(); super.onDestroy() }
 
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        when {
+            tab == "rec" && recTypeDir != null -> backFromFiles()
+            tab == "rec" && recPerson != null -> { recPerson = null; showRecordings() }
+            tab != "home" -> showHome()
+            else -> super.onBackPressed()
+        }
+    }
+
     private fun ensureService() {
         if (hasPerms() && !RecorderService.serviceUp) {
             try { startForegroundService(Intent(this, RecorderService::class.java)) } catch (_: Exception) {}
@@ -150,7 +236,7 @@ class MainActivity : Activity() {
     }
 
     private fun screen(vararg views: View): ScrollView {
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(24), dp(20), dp(20)) }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(20), dp(18), dp(20)) }
         views.forEach { col.addView(it) }
         val sv = ScrollView(this).apply { addView(col) }
         content.removeAllViews(); content.addView(sv)
@@ -161,23 +247,35 @@ class MainActivity : Activity() {
 
     // ---------- Home ----------
     private fun showHome() {
-        tab = "home"
-        statusView = tv("", 18f, accent, true)
-        noteView = tv("", 14f, Color.parseColor("#FFB74D"))
+        setTab("home")
+        statusView = tv("", 17f, Color.WHITE, true)
+        noteView = tv("", 13f, cOrange)
+        waView = tv("", 13f, cMuted)
+        dotView = View(this).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(cOrange) }
+            layoutParams = LinearLayout.LayoutParams(dp(12), dp(12)).apply { marginEnd = dp(10) }
+        }
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            addView(dotView); addView(statusView)
+        }
         toggleBtn = btn("Phone call record (manual)") { RecorderService.toggleManual(4) }
+        voipBtn = ghostBtn("WhatsApp / Instagram record (manual)") { RecorderService.toggleManual(7) }
         val sw = Switch(this).apply {
             text = "Auto-record (call par khud shuru)"
             setTextColor(Color.WHITE)
             isChecked = RecorderService.auto
             setOnCheckedChangeListener { _, c -> RecorderService.setAuto(this@MainActivity, c) }
-            setPadding(dp(4), dp(14), dp(4), dp(14))
         }
         screen(
-            tv("PixelCall Keeper", 30f, Color.WHITE, true),
-            tv("Private recordings, aapke phone par", 15f, Color.LTGRAY),
-            statusView!!, noteView!!, sw, toggleBtn!!,
-            tv("Helper pehle Setup ke mutabiq USB se chalana hota hai. " +
-               "Normal phone call par recording khud shuru hoti hai.", 14f, Color.LTGRAY)
+            tv("PixelCall Keeper", 28f, Color.WHITE, true),
+            tv("Private recordings, aapke phone par", 14f, cMuted),
+            card(statusRow, noteView!!, waView!!),
+            card(sw),
+            toggleBtn!!, voipBtn!!,
+            tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
+               "WhatsApp / Instagram: SPEAKER ON rakhna zaroori hai.", 12f, cMuted)
+                .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) }
         )
         refreshHome()
     }
@@ -185,21 +283,32 @@ class MainActivity : Activity() {
     private fun refreshHome() {
         val s = statusView ?: return
         val b = toggleBtn ?: return
+        val v = voipBtn
+        val dot = dotView?.background as? GradientDrawable
         if (RecorderService.recording) {
             val sec = (System.currentTimeMillis() - RecorderService.startedAt) / 1000
             s.text = "Recording chal rahi hai: %02d:%02d".format(sec / 60, sec % 60)
-            b.text = "Recording band karein"
-            b.isEnabled = true
+            b.text = "Recording band karein"; b.isEnabled = true
+            v?.text = "Recording band karein"; v?.isEnabled = true
+            dot?.setColor(cRed)
         } else {
             s.text = when {
                 !RecorderService.serviceUp -> "Service band hai (microphone permission dein)"
                 RecorderService.helperConnected -> "Taiyar: helper connected"
-                else -> "Helper connected nahi. Setup mein command dekhein."
+                else -> "Helper connected nahi (Setup dekhein)"
             }
             b.text = "Phone call record (manual)"
             b.isEnabled = RecorderService.helperConnected
+            v?.text = "WhatsApp / Instagram record (manual)"
+            v?.isEnabled = PckAccessibilityService.connected
+            dot?.setColor(if (RecorderService.helperConnected) cGreen else cOrange)
         }
+        b.alpha = if (b.isEnabled) 1f else 0.45f
+        v?.alpha = if (v?.isEnabled == true) 1f else 0.45f
         noteView?.text = RecorderService.lastError?.let { "Note: $it" } ?: ""
+        waView?.text = if (PckAccessibilityService.connected)
+            "WhatsApp / Instagram: taiyar (speaker ON rakhein)"
+        else "WhatsApp / Instagram: Setup mein Accessibility ON karein"
     }
 
     private fun hasPerms() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -213,6 +322,15 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) p += Manifest.permission.POST_NOTIFICATIONS
         requestPermissions(p.toTypedArray(), 1)
     }
+
+    // ---------- time helpers (12 ghanta) ----------
+    private val fileFmt = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US)
+    private fun fileDate(name: String): Date? =
+        try { fileFmt.parse(name.substringBeforeLast('.')) } catch (_: Exception) { null }
+    private fun t12(name: String): String =
+        fileDate(name)?.let { SimpleDateFormat("h:mm a", Locale.US).format(it) } ?: ""
+    private fun dt12(name: String): String =
+        fileDate(name)?.let { SimpleDateFormat("dd MMM, h:mm a", Locale.US).format(it) } ?: name
 
     // ---------- Folder helpers ----------
     private fun baseDir() = RecorderService.dir(this)
@@ -268,9 +386,16 @@ class MainActivity : Activity() {
         return if (last.length >= 10) dayLabel(last.substring(0, 10)) else ""
     }
 
+    private fun backBtn(onClick: () -> Unit) = Button(this).apply {
+        text = "←  Peeche"; isAllCaps = false; setTextColor(Color.WHITE); textSize = 14f
+        background = roundBg(cCard2, 14); stateListAnimator = null
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(-2, dp(42))
+    }
+
     // ---------- Recordings screens ----------
     private fun showRecordings() {
-        tab = "rec"
+        setTab("rec")
         val td = recTypeDir
         if (td != null && audioFiles(td).isNotEmpty()) { showFiles(td); return }
         recTypeDir = null
@@ -301,24 +426,23 @@ class MainActivity : Activity() {
     private fun showPersons() {
         val title = tv("Recordings", 28f, Color.WHITE, true)
         val search = EditText(this).apply {
-            hint = "Naam ya number dhundhein"
-            setTextColor(Color.WHITE); setHintTextColor(Color.GRAY); setSingleLine(true)
+            hint = "🔍  Naam ya number dhundhein"
+            setTextColor(Color.WHITE); setHintTextColor(cMuted); setSingleLine(true)
+            background = roundBg(cCard, 16)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
         }
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val all = persons()
         fun fill(q: String) {
             box.removeAllViews()
             val list = all.filter { it.label.contains(q.trim(), ignoreCase = true) }
-            if (list.isEmpty()) box.addView(tv(if (all.isEmpty()) "Abhi koi recording nahi hai." else "Kuch nahi mila.", 15f, Color.LTGRAY))
+            if (list.isEmpty()) box.addView(tv(if (all.isEmpty()) "Abhi koi recording nahi hai." else "Kuch nahi mila.", 15f, cMuted))
             list.forEach { p ->
                 val files = if (p.legacy) audioFiles(p.dir) else allAudio(p.dir).toList()
-                box.addView(Button(this).apply {
-                    text = "👤  ${p.label}\n${files.size} recording  •  ${lastLabel(files)}"
-                    isAllCaps = false; gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                    setOnClickListener { openPerson(p) }
-                    setOnLongClickListener { if (!p.legacy && p.dir.name != "_new") personMenu(p); true }
-                    layoutParams = LinearLayout.LayoutParams(-1, dp(72)).apply { topMargin = dp(8) }
-                })
+                val b = listBtn("👤  ${p.label}\n${files.size} recording  •  ${lastLabel(files)}") { openPerson(p) }
+                b.setOnLongClickListener { if (!p.legacy && p.dir.name != "_new") personMenu(p); true }
+                box.addView(b)
             }
         }
         fill("")
@@ -327,26 +451,20 @@ class MainActivity : Activity() {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
         })
-        val hint = tv("Folder ko dabaye rakhein: naam badalna ya delete.", 12f, Color.GRAY)
+        val hint = tv("Folder ko dabaye rakhein: naam badalna ya delete.", 12f, cMuted)
+            .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) }
         screen(title, search, box, hint)
     }
 
     private fun showTypes(person: File) {
         val views = mutableListOf<View>(
-            Button(this).apply {
-                text = "← Peeche"; isAllCaps = false
-                setOnClickListener { recPerson = null; showRecordings() }
-                layoutParams = LinearLayout.LayoutParams(-2, dp(44))
-            },
-            tv(personLabel(), 24f, Color.WHITE, true)
+            backBtn { recPerson = null; showRecordings() },
+            tv(personLabel(), 24f, Color.WHITE, true).apply { setPadding(dp(4), dp(12), dp(4), dp(4)) }
         )
         types(person).forEach { (name, dir) ->
             val files = audioFiles(dir)
-            views += Button(this).apply {
-                text = "${typeIcon(name)}  $name\n${files.size} recording  •  ${lastLabel(files)}"
-                isAllCaps = false; gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                setOnClickListener { recTypeDir = dir; recTypeName = name; showRecordings() }
-                layoutParams = LinearLayout.LayoutParams(-1, dp(72)).apply { topMargin = dp(8) }
+            views += listBtn("${typeIcon(name)}  $name\n${files.size} recording  •  ${lastLabel(files)}") {
+                recTypeDir = dir; recTypeName = name; showRecordings()
             }
         }
         screen(*views.toTypedArray())
@@ -355,12 +473,8 @@ class MainActivity : Activity() {
     private fun showFiles(dir: File) {
         val crumb = if (recPerson != null) "${personLabel()} › $recTypeName" else recTypeName
         val views = mutableListOf<View>(
-            Button(this).apply {
-                text = "← Peeche"; isAllCaps = false
-                setOnClickListener { backFromFiles() }
-                layoutParams = LinearLayout.LayoutParams(-2, dp(44))
-            },
-            tv(crumb, 22f, Color.WHITE, true)
+            backBtn { backFromFiles() },
+            tv(crumb, 21f, Color.WHITE, true).apply { setPadding(dp(4), dp(12), dp(4), dp(4)) }
         )
         val files = audioFiles(dir).sortedByDescending { it.name }
         var lastDay = ""
@@ -368,28 +482,27 @@ class MainActivity : Activity() {
             val day = if (f.name.length >= 10) f.name.substring(0, 10) else ""
             if (day != lastDay) {
                 lastDay = day
-                views += tv(dayLabel(day), 15f, accent, true).apply { setPadding(dp(4), dp(18), dp(4), dp(4)) }
+                views += tv(dayLabel(day), 14f, cCyan, true).apply { setPadding(dp(4), dp(18), dp(4), dp(2)) }
             }
-            val time = if (f.name.length >= 16) f.name.substring(11, 16).replace('-', ':') else ""
             val dur = if (f.extension == "wav" && f.length() > 44) {
                 val s = (f.length() - 44) / 32000
                 "  •  %d:%02d".format(s / 60, s % 60)
             } else ""
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val play = listBtn((if (playingFile == f) "■  " else "▶  ") + t12(f.name) + dur) { play(f, crumb) }
+            play.layoutParams = LinearLayout.LayoutParams(0, dp(56), 1f).apply { topMargin = dp(8) }
+            play.minHeight = dp(56)
+            row.addView(play)
             row.addView(Button(this).apply {
-                text = (if (playingFile == f) "■  " else "▶  ") + time + dur
-                isAllCaps = false; gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                setOnClickListener { play(f, crumb) }
-            }, LinearLayout.LayoutParams(0, dp(52), 1f))
-            row.addView(Button(this).apply {
-                text = "Share"; isAllCaps = false; textSize = 12f
-                setPadding(0, 0, 0, 0)
+                text = "Share"; isAllCaps = false; textSize = 12f; setTextColor(Color.WHITE)
+                background = roundBg(cCard2, 14); stateListAnimator = null; setPadding(0, 0, 0, 0)
                 setOnClickListener { share(f) }
-            }, LinearLayout.LayoutParams(dp(64), dp(52)))
+            }, LinearLayout.LayoutParams(dp(62), dp(56)).apply { topMargin = dp(8); marginStart = dp(6) })
             row.addView(Button(this).apply {
-                text = "⋮"; isAllCaps = false
+                text = "⋮"; isAllCaps = false; textSize = 18f; setTextColor(Color.WHITE)
+                background = roundBg(cCard2, 14); stateListAnimator = null; setPadding(0, 0, 0, 0)
                 setOnClickListener { fileMenu(f) }
-            }, LinearLayout.LayoutParams(dp(48), dp(52)))
+            }, LinearLayout.LayoutParams(dp(46), dp(56)).apply { topMargin = dp(8); marginStart = dp(6) })
             views += row
         }
         screen(*views.toTypedArray())
@@ -431,7 +544,7 @@ class MainActivity : Activity() {
     }
 
     private fun fileMenu(f: File) {
-        AlertDialog.Builder(this).setTitle(f.nameWithoutExtension)
+        AlertDialog.Builder(this).setTitle(dt12(f.name))
             .setItems(arrayOf("Share", "Dusre naam / folder mein bhejein", "Delete")) { _, which ->
                 when (which) { 0 -> share(f); 1 -> moveDialog(f); else -> confirmDelete(f) }
             }.show()
@@ -456,7 +569,7 @@ class MainActivity : Activity() {
     }
 
     private fun confirmDelete(f: File) {
-        AlertDialog.Builder(this).setTitle("Delete karein?").setMessage(f.name)
+        AlertDialog.Builder(this).setTitle("Delete karein?").setMessage(dt12(f.name))
             .setPositiveButton("Delete") { _, _ ->
                 if (playingFile == f) stopPlayback()
                 f.delete(); showRecordings()
@@ -505,7 +618,7 @@ class MainActivity : Activity() {
             mp.setOnCompletionListener { playBtn.text = "▶"; updatePos() }
             player = mp
             playingFile = f
-            titleView.text = "$crumb  •  ${f.nameWithoutExtension}"
+            titleView.text = "$crumb  •  ${dt12(f.name)}"
             playerBar.visibility = View.VISIBLE
             playBtn.text = "❚❚"
             if (speed != 1.0f) applySpeed()
@@ -556,29 +669,51 @@ class MainActivity : Activity() {
     }
 
     // ---------- Setup ----------
+    private val helperCmd = "adb shell \"CLASSPATH=\$(pm path com.pixelcallkeeper | cut -d: -f2) " +
+        "nohup setsid app_process / com.pixelcallkeeper.Helper >/data/local/tmp/pck.log 2>&1 &\""
+
     private fun showSetup() {
-        tab = "setup"
-        val cmd = tv("adb shell \"CLASSPATH=\$(pm path com.pixelcallkeeper | cut -d: -f2) " +
-            "nohup setsid app_process / com.pixelcallkeeper.Helper >/data/local/tmp/pck.log 2>&1 &\"",
-            13f, accent).apply { setTextIsSelectable(true) }
+        setTab("setup")
+        val cmd = tv(helperCmd, 12f, cCyan).apply { setTextIsSelectable(true) }
         screen(
             tv("Setup", 28f, Color.WHITE, true),
-            tv("Microphone: " + if (hasPerms()) "Allowed" else "Allow nahi hai", 16f, accent, true),
-            btn("Permissions do (mic, call log, contacts)") { askPerms() },
-            btn("WhatsApp / Instagram naam ke liye: Notification access") {
-                try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
-            },
-            btn("App settings kholen") {
-                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-            },
-            tv("Helper chalane ka tareeqa (har restart ke baad ek baar):", 15f, Color.WHITE, true),
-            tv("1) Phone USB se computer se jodein, USB debugging ON rakhein.\n" +
-               "2) Computer par platform-tools folder mein cmd kholein aur ye command chalayein:", 14f, Color.LTGRAY),
-            cmd,
-            tv("3) Kuch second mein Home par 'Taiyar: helper connected' aa jayega. USB hata sakte hain.\n" +
-               "4) Battery > Unrestricted zaroor karein.\n" +
-               "5) Samne wale ki ijazat ke bina call record na karein.", 14f, Color.LTGRAY),
-            btn("Service band karein") { RecorderService.stopAll() }
+            card(
+                tv("Permissions", 16f, Color.WHITE, true),
+                tv("Microphone: " + if (hasPerms()) "Allowed ✓" else "Allow nahi hai", 13f, if (hasPerms()) cGreen else cOrange),
+                btn("Permissions do (mic, call log, contacts)") { askPerms() }
+            ),
+            card(
+                tv("WhatsApp / Instagram", 16f, Color.WHITE, true),
+                tv("Accessibility: " + if (PckAccessibilityService.connected) "ON ✓" else "OFF", 13f,
+                    if (PckAccessibilityService.connected) cGreen else cOrange),
+                tv("Is se mic call ke dauran chalta rehta hai. Ye service screen ka koi data nahi padhti. " +
+                   "Settings > Accessibility > Installed apps > PixelCall Keeper ko ON karein.", 12f, cMuted),
+                btn("Accessibility settings kholen") {
+                    try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {}
+                },
+                ghostBtn("Notification access (naam pakadne ke liye)") {
+                    try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
+                }
+            ),
+            card(
+                tv("Helper (phone calls ke liye)", 16f, Color.WHITE, true),
+                tv("Har phone restart ke baad ek baar USB se chalana hota hai. " +
+                   "Cmd (platform-tools folder) mein ye command chalayein:", 12f, cMuted),
+                cmd,
+                ghostBtn("Command copy karein") {
+                    val cm = getSystemService(ClipboardManager::class.java)
+                    cm.setPrimaryClip(ClipData.newPlainText("cmd", helperCmd))
+                    Toast.makeText(this, "Copy ho gaya", Toast.LENGTH_SHORT).show()
+                }
+            ),
+            card(
+                tv("Zaroori", 16f, Color.WHITE, true),
+                tv("• Battery > Unrestricted karein.\n• Samne wale ki ijazat ke bina call record na karein.", 12f, cMuted),
+                ghostBtn("App settings kholen") {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                },
+                ghostBtn("Service band karein") { RecorderService.stopAll() }
+            )
         )
     }
 
