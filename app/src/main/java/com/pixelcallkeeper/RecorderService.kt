@@ -44,6 +44,7 @@ class RecorderService : Service() {
         @Volatile var lastError: String? = null
         @Volatile var info: String? = null
         @Volatile var auto = true
+        @Volatile var boost = true
         @Volatile private var instance: RecorderService? = null
 
         fun dir(ctx: Context): File =
@@ -55,6 +56,11 @@ class RecorderService : Service() {
         fun setAuto(ctx: Context, v: Boolean) {
             auto = v
             ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("auto", v).apply()
+        }
+
+        fun setBoost(ctx: Context, v: Boolean) {
+            boost = v
+            ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("boost", v).apply()
         }
 
         fun toggleManual(source: Int = 4) { instance?.manualToggle(source) }
@@ -92,6 +98,7 @@ class RecorderService : Service() {
             serviceUp = true
             instance = this
             auto = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("auto", true)
+            boost = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("boost", true)
             Thread { serverLoop() }.start()
             Thread { monitor() }.start()
         }
@@ -179,6 +186,57 @@ class RecorderService : Service() {
         send("S$source")
     }
 
+    // Halki awaaz ko khud tez karta hai (earpiece par samne wale ki awaaz ke liye)
+    private class Agc {
+        private var gain = 1.0f
+        private var hpIn = 0f
+        private var hpOut = 0f
+        private val gate = 40f
+        private val target = 2600f
+        private val maxGain = 14f
+
+        fun process(b: ByteArray, off: Int, len: Int) {
+            val total = len / 2
+            val sub = 160
+            var s = 0
+            while (s < total) {
+                val cnt = minOf(sub, total - s)
+                val tmp = FloatArray(cnt)
+                var sum = 0.0
+                for (i in 0 until cnt) {
+                    val idx = off + (s + i) * 2
+                    val x = ((b[idx + 1].toInt() shl 8) or (b[idx].toInt() and 0xFF)).toShort().toFloat()
+                    val y = x - hpIn + 0.97f * hpOut
+                    hpIn = x
+                    hpOut = y
+                    tmp[i] = y
+                    sum += (y * y).toDouble()
+                }
+                val rms = Math.sqrt(sum / cnt).toFloat()
+                var tg = gain
+                if (rms > gate) {
+                    val want = (target / rms).coerceIn(1.0f, maxGain)
+                    tg = if (want < gain) gain + (want - gain) * 0.6f else gain + (want - gain) * 0.06f
+                }
+                val g0 = gain
+                for (i in 0 until cnt) {
+                    val g = g0 + (tg - g0) * (i + 1) / cnt
+                    var y = tmp[i] * g
+                    val ay = abs(y)
+                    if (ay > 24000f) {
+                        y = (if (y < 0f) -1f else 1f) * minOf(32767f, 24000f + (ay - 24000f) * 0.3f)
+                    }
+                    val v = y.toInt().coerceIn(-32768, 32767)
+                    val idx = off + (s + i) * 2
+                    b[idx] = (v and 0xFF).toByte()
+                    b[idx + 1] = ((v shr 8) and 0xFF).toByte()
+                }
+                gain = tg
+                s += cnt
+            }
+        }
+    }
+
     private class Probe(val name: String, val ar: AudioRecord) {
         val buf = ByteArrayOutputStream()
         @Volatile var peak = 0
@@ -208,6 +266,7 @@ class RecorderService : Service() {
 
     private fun runLocal() {
         val probes = mutableListOf<Probe>()
+        val agc = if (boost) Agc() else null
         try {
             val rate = 16000
             val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -244,6 +303,7 @@ class RecorderService : Service() {
                         }
                         synchronized(lockP) {
                             if (p.direct) {
+                                agc?.process(data, 0, n)
                                 synchronized(fileLock) { fos?.write(data, 0, n); pcmBytes += n }
                             } else p.buf.write(data, 0, n)
                         }
@@ -259,9 +319,11 @@ class RecorderService : Service() {
             val best = probes.maxByOrNull { it.peak }!!
             info = "WhatsApp mic: " + probes.joinToString(" ") { "${it.name}=${it.peak}" } + "  → ${best.name}"
             synchronized(lockP) {
+                val raw = best.buf.toByteArray()
+                agc?.process(raw, 0, raw.size)
                 synchronized(fileLock) {
-                    fos?.write(best.buf.toByteArray())
-                    pcmBytes += best.buf.size()
+                    fos?.write(raw)
+                    pcmBytes += raw.size
                 }
                 best.buf.reset()
                 best.direct = true
