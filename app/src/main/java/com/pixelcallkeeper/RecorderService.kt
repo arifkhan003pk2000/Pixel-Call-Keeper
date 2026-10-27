@@ -71,7 +71,6 @@ class RecorderService : Service() {
     private var curStart = 0L
     private var pcmBytes = 0L
     @Volatile private var manual = false
-    @Volatile private var phoneAgc: Agc? = null
     @Volatile private var localRun = false
     private var localThread: Thread? = null
 
@@ -131,7 +130,6 @@ class RecorderService : Service() {
                 if (len == 0) { finalizeFile(); continue }
                 val buf = ByteArray(len)
                 inp.readFully(buf)
-                phoneAgc?.process(buf, 0, len)
                 synchronized(fileLock) {
                     fos?.write(buf)
                     pcmBytes += len
@@ -181,26 +179,19 @@ class RecorderService : Service() {
     private fun startRec(source: Int) {
         if (!helperConnected || recording) return
         if (!openNewFile(source)) return
-        phoneAgc = if (source == 4) Agc(true) else null
         recording = true
         startedAt = System.currentTimeMillis()
         send("S$source")
     }
 
-    // Awaaz khud adjust karta hai.
-    // gentle=true: phone calls ke liye bohat halka (sirf dheemi awaaz thodi uthti hai, clip nahi hoti).
-    // gentle=false: WhatsApp / Instagram (kaan se lagane par samne wale ki halki awaaz ke liye).
-    private class Agc(private val gentle: Boolean) {
+    // Halki awaaz ko khud tez karta hai (earpiece par samne wale ki awaaz ke liye)
+    private class Agc {
         private var gain = 1.0f
-        private var att = 1.0f
         private var hpIn = 0f
         private var hpOut = 0f
-        private val target = 3000f
-        private val ring = FloatArray(300)
-        private var ringPos = 0
-        private var ringFill = 0
-        private var sinceCalc = 0
-        private var nf = 20f
+        private val gate = 40f
+        private val target = 2600f
+        private val maxGain = 14f
 
         fun process(b: ByteArray, off: Int, len: Int) {
             val total = len / 2
@@ -213,38 +204,21 @@ class RecorderService : Service() {
                 for (i in 0 until cnt) {
                     val idx = off + (s + i) * 2
                     val x = ((b[idx + 1].toInt() shl 8) or (b[idx].toInt() and 0xFF)).toShort().toFloat()
-                    val h = x - hpIn + 0.97f * hpOut
+                    val y = x - hpIn + 0.97f * hpOut
                     hpIn = x
-                    hpOut = h
-                    tmp[i] = h
-                    sum += (h * h).toDouble()
+                    hpOut = y
+                    tmp[i] = y
+                    sum += (y * y).toDouble()
                 }
                 val rms = Math.sqrt(sum / cnt).toFloat()
-
-                // shor ka level: pichle 3 second ke sabse dheemay hisson se andaza
-                ring[ringPos] = rms
-                ringPos = (ringPos + 1) % ring.size
-                if (ringFill < ring.size) ringFill++
-                sinceCalc++
-                if (sinceCalc >= 50 && ringFill >= 100) {
-                    sinceCalc = 0
-                    val copy = ring.copyOf(ringFill)
-                    copy.sort()
-                    nf = copy[(ringFill * 0.1f).toInt()].coerceIn(3f, 500f)
+                var tg = gain
+                if (rms > gate) {
+                    val want = (target / rms).coerceIn(1.0f, maxGain)
+                    tg = if (want < gain) gain + (want - gain) * 0.6f else gain + (want - gain) * 0.06f
                 }
-
-                val maxGain = if (gentle) 3f else (700f / nf).coerceIn(3f, 20f)
-                val want = (target / maxOf(rms, 1f)).coerceIn(1.0f, maxGain)
-                val tg = if (want < gain) gain + (want - gain) * 0.6f else gain + (want - gain) * 0.08f
-
-                // shor wali jagah thodi dabti hai, par kabhi poori khamosh nahi hoti
-                val x = if (gentle) 1f else ((rms - nf) / (nf * 1.5f)).coerceIn(0f, 1f)
-                val attTarget = 0.5f + 0.5f * x
-                val a0 = att
-                val a1 = a0 + (attTarget - a0) * (if (attTarget > a0) 0.5f else 0.04f)
                 val g0 = gain
                 for (i in 0 until cnt) {
-                    val g = (g0 + (tg - g0) * (i + 1) / cnt) * (a0 + (a1 - a0) * (i + 1) / cnt)
+                    val g = g0 + (tg - g0) * (i + 1) / cnt
                     var y = tmp[i] * g
                     val ay = abs(y)
                     if (ay > 24000f) {
@@ -256,7 +230,6 @@ class RecorderService : Service() {
                     b[idx + 1] = ((v shr 8) and 0xFF).toByte()
                 }
                 gain = tg
-                att = a1
                 s += cnt
             }
         }
@@ -291,7 +264,7 @@ class RecorderService : Service() {
 
     private fun runLocal() {
         val probes = mutableListOf<Probe>()
-        val agc = Agc(false)
+        val agc = Agc()
         try {
             val rate = 16000
             val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
