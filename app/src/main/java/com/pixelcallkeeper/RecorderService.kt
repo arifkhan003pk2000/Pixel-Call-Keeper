@@ -77,18 +77,13 @@ class RecorderService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val ch = "pck2"
+        val ch = "pck"
         val nm = getSystemService(NotificationManager::class.java)
-        try { nm.deleteNotificationChannel("pck") } catch (_: Exception) {}
-        val chan = NotificationChannel(ch, "PixelCall Keeper", NotificationManager.IMPORTANCE_MIN)
-        chan.lockscreenVisibility = Notification.VISIBILITY_SECRET
-        chan.setShowBadge(false)
-        nm.createNotificationChannel(chan)
+        nm.createNotificationChannel(NotificationChannel(ch, "PixelCall Keeper", NotificationManager.IMPORTANCE_LOW))
         val n = Notification.Builder(this, ch)
             .setContentTitle("PixelCall Keeper")
-            .setContentText("Chal raha hai")
+            .setContentText("Helper ka intezar / recording")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setVisibility(Notification.VISIBILITY_SECRET)
             .setOngoing(true)
             .build()
         startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)

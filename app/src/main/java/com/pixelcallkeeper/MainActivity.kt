@@ -331,7 +331,8 @@ class MainActivity : Activity() {
             toggleBtn!!, voipBtn!!,
             tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
                "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par awaaz khud-ba-khud adjust hoti hai.", 12f, cMuted)
-                .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) }
+                .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) },
+            tv("Build v7", 11f, cMuted)
         )
         refreshHome()
     }
