@@ -33,12 +33,12 @@ private data class Person(val label: String, val dir: File, val legacy: Boolean)
 
 class MainActivity : Activity() {
 
-    private val cBg = Color.parseColor("#0B0F1A")
-    private val cCard = Color.parseColor("#151B2E")
-    private val cCard2 = Color.parseColor("#1F2742")
-    private val cCyan = Color.parseColor("#22D3EE")
-    private val cPurple = Color.parseColor("#A66BFF")
-    private val cMuted = Color.parseColor("#9AA3B8")
+    private val cBg = Color.parseColor("#0E0607")
+    private val cCard = Color.parseColor("#1C0E11")
+    private val cCard2 = Color.parseColor("#2B141A")
+    private val cCyan = Color.parseColor("#FF4D4D")
+    private val cPurple = Color.parseColor("#9B1020")
+    private val cMuted = Color.parseColor("#C4A1A6")
     private val cGreen = Color.parseColor("#34D399")
     private val cOrange = Color.parseColor("#FBBF24")
     private val cRed = Color.parseColor("#F87171")
@@ -135,6 +135,65 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
             views.forEach { addView(it) }
         }
+
+    private fun badge(type: String, sizeDp: Int = 44): TextView {
+        val glyph: String
+        val bg = GradientDrawable()
+        when {
+            type.startsWith("WhatsApp") -> { glyph = "✆\uFE0E"; bg.shape = GradientDrawable.OVAL; bg.setColor(Color.parseColor("#25D366")) }
+            type.startsWith("Phone") -> { glyph = "✆\uFE0E"; bg.shape = GradientDrawable.OVAL; bg.setColor(Color.parseColor("#2F80ED")) }
+            type.startsWith("Instagram") -> {
+                glyph = "◎"
+                bg.orientation = GradientDrawable.Orientation.BL_TR
+                bg.colors = intArrayOf(Color.parseColor("#FEDA75"), Color.parseColor("#FA7E1E"),
+                    Color.parseColor("#D62976"), Color.parseColor("#962FBF"), Color.parseColor("#4F5BD5"))
+                bg.cornerRadius = dp(sizeDp / 3).toFloat()
+            }
+            else -> { glyph = "♪"; bg.shape = GradientDrawable.OVAL; bg.setColor(Color.parseColor("#6B5559")) }
+        }
+        return TextView(this).apply {
+            text = glyph
+            setTextColor(Color.WHITE)
+            textSize = sizeDp * 0.45f
+            gravity = Gravity.CENTER
+            setTypeface(typeface, Typeface.BOLD)
+            background = bg
+            layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+        }
+    }
+
+    private fun initialBadge(name: String, sizeDp: Int = 44): TextView {
+        val bg = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.parseColor("#7A1B25")) }
+        val ch = name.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "#"
+        return TextView(this).apply {
+            text = ch; setTextColor(Color.WHITE); textSize = sizeDp * 0.42f
+            gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
+            background = bg
+            layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+        }
+    }
+
+    private fun iconRow(left: View, title: String, sub: String, trailing: List<View>, onClick: () -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = roundBg(cCard, 16)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
+        }
+        left.layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(14) }
+        row.addView(left)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(tv(title, 16f, Color.WHITE, true))
+        col.addView(tv(sub, 12f, cMuted))
+        row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+        trailing.forEach { row.addView(it) }
+        return row
+    }
+
+    private fun boostLabel() =
+        "WhatsApp awaaz tez karna: ${RecorderService.boostNames[RecorderService.boostLevel]}   (badalne ke liye dabayein)"
 
     private fun setTab(t: String) {
         tab = t
@@ -267,19 +326,17 @@ class MainActivity : Activity() {
             isChecked = RecorderService.auto
             setOnCheckedChangeListener { _, c -> RecorderService.setAuto(this@MainActivity, c) }
         }
-        val sw2 = Switch(this).apply {
-            text = "WhatsApp: halki awaaz tez karein (kaan se lagane par)"
-            setTextColor(Color.WHITE)
-            isChecked = RecorderService.boost
-            setOnCheckedChangeListener { _, c -> RecorderService.setBoost(this@MainActivity, c) }
+        var bb: Button? = null
+        bb = ghostBtn(boostLabel()) {
+            RecorderService.cycleBoost(this@MainActivity)
+            bb?.text = boostLabel()
         }
         screen(
             tv("PixelCall Keeper", 28f, Color.WHITE, true),
             tv("Private recordings, aapke phone par", 14f, cMuted),
             card(statusRow, noteView!!, waView!!),
             card(sw),
-            card(sw2),
-            toggleBtn!!, voipBtn!!,
+            toggleBtn!!, voipBtn!!, bb!!,
             tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
                "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par samne wale ki awaaz halki aati hai, upar wala switch ON rakhein.", 12f, cMuted)
                 .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) }
@@ -447,9 +504,15 @@ class MainActivity : Activity() {
             if (list.isEmpty()) box.addView(tv(if (all.isEmpty()) "Abhi koi recording nahi hai." else "Kuch nahi mila.", 15f, cMuted))
             list.forEach { p ->
                 val files = if (p.legacy) audioFiles(p.dir) else allAudio(p.dir).toList()
-                val b = listBtn("👤  ${p.label}\n${files.size} recording  •  ${lastLabel(files)}") { openPerson(p) }
-                b.setOnLongClickListener { if (!p.legacy && p.dir.name != "_new") personMenu(p); true }
-                box.addView(b)
+                val trailing = if (p.legacy) emptyList() else types(p.dir).map { (tn, _) ->
+                    badge(tn, 24).apply {
+                        layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginStart = dp(6) }
+                    }
+                }
+                val r = iconRow(initialBadge(p.label), p.label,
+                    "${files.size} recording  •  ${lastLabel(files)}", trailing) { openPerson(p) }
+                r.setOnLongClickListener { if (!p.legacy && p.dir.name != "_new") personMenu(p); true }
+                box.addView(r)
             }
         }
         fill("")
@@ -470,7 +533,7 @@ class MainActivity : Activity() {
         )
         types(person).forEach { (name, dir) ->
             val files = audioFiles(dir)
-            views += listBtn("${typeIcon(name)}  $name\n${files.size} recording  •  ${lastLabel(files)}") {
+            views += iconRow(badge(name), name, "${files.size} recording  •  ${lastLabel(files)}", emptyList()) {
                 recTypeDir = dir; recTypeName = name; showRecordings()
             }
         }
@@ -481,7 +544,14 @@ class MainActivity : Activity() {
         val crumb = if (recPerson != null) "${personLabel()} › $recTypeName" else recTypeName
         val views = mutableListOf<View>(
             backBtn { backFromFiles() },
-            tv(crumb, 21f, Color.WHITE, true).apply { setPadding(dp(4), dp(12), dp(4), dp(4)) }
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(4), dp(12), dp(4), dp(4))
+                val bd = badge(recTypeName, 34)
+                bd.layoutParams = LinearLayout.LayoutParams(dp(34), dp(34)).apply { marginEnd = dp(10) }
+                addView(bd)
+                addView(tv(crumb, 20f, Color.WHITE, true))
+            }
         )
         val files = audioFiles(dir).sortedByDescending { it.name }
         var lastDay = ""

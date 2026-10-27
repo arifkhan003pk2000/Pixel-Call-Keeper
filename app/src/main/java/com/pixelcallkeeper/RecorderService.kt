@@ -44,7 +44,7 @@ class RecorderService : Service() {
         @Volatile var lastError: String? = null
         @Volatile var info: String? = null
         @Volatile var auto = true
-        @Volatile var boost = true
+        @Volatile var boostLevel = 3
         @Volatile private var instance: RecorderService? = null
 
         fun dir(ctx: Context): File =
@@ -58,9 +58,11 @@ class RecorderService : Service() {
             ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("auto", v).apply()
         }
 
-        fun setBoost(ctx: Context, v: Boolean) {
-            boost = v
-            ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("boost", v).apply()
+        val boostNames = listOf("Band", "Halka", "Medium", "Zyada")
+
+        fun cycleBoost(ctx: Context) {
+            boostLevel = (boostLevel + 1) % 4
+            ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putInt("boostLevel", boostLevel).apply()
         }
 
         fun toggleManual(source: Int = 4) { instance?.manualToggle(source) }
@@ -83,13 +85,18 @@ class RecorderService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val ch = "pck"
+        val ch = "pck2"
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(ch, "PixelCall Keeper", NotificationManager.IMPORTANCE_LOW))
+        try { nm.deleteNotificationChannel("pck") } catch (_: Exception) {}
+        val chan = NotificationChannel(ch, "PixelCall Keeper", NotificationManager.IMPORTANCE_MIN)
+        chan.lockscreenVisibility = Notification.VISIBILITY_SECRET
+        chan.setShowBadge(false)
+        nm.createNotificationChannel(chan)
         val n = Notification.Builder(this, ch)
             .setContentTitle("PixelCall Keeper")
-            .setContentText("Helper ka intezar / recording")
+            .setContentText("Chal raha hai")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setVisibility(Notification.VISIBILITY_SECRET)
             .setOngoing(true)
             .build()
         startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
@@ -98,7 +105,7 @@ class RecorderService : Service() {
             serviceUp = true
             instance = this
             auto = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("auto", true)
-            boost = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("boost", true)
+            boostLevel = getSharedPreferences("pck", Context.MODE_PRIVATE).getInt("boostLevel", 3)
             Thread { serverLoop() }.start()
             Thread { monitor() }.start()
         }
@@ -186,14 +193,17 @@ class RecorderService : Service() {
         send("S$source")
     }
 
-    // Halki awaaz ko khud tez karta hai (earpiece par samne wale ki awaaz ke liye)
-    private class Agc {
+    // Halki awaaz ko tez karta hai, shor ko dabata hai (kaan se lagane par samne wale ki awaaz ke liye)
+    private class Agc(level: Int) {
         private var gain = 1.0f
+        private var att = 1.0f
         private var hpIn = 0f
         private var hpOut = 0f
-        private val gate = 40f
-        private val target = 2600f
-        private val maxGain = 14f
+        private var lp1 = 0f
+        private var lp2 = 0f
+        private var nf = 50f
+        private val target = when (level) { 1 -> 2200f; 2 -> 2600f; else -> 3200f }
+        private val maxGain = when (level) { 1 -> 8f; 2 -> 14f; else -> 24f }
 
         fun process(b: ByteArray, off: Int, len: Int) {
             val total = len / 2
@@ -206,21 +216,30 @@ class RecorderService : Service() {
                 for (i in 0 until cnt) {
                     val idx = off + (s + i) * 2
                     val x = ((b[idx + 1].toInt() shl 8) or (b[idx].toInt() and 0xFF)).toShort().toFloat()
-                    val y = x - hpIn + 0.97f * hpOut
+                    val h = x - hpIn + 0.97f * hpOut
                     hpIn = x
-                    hpOut = y
-                    tmp[i] = y
-                    sum += (y * y).toDouble()
+                    hpOut = h
+                    lp1 += 0.66f * (h - lp1)
+                    lp2 += 0.66f * (lp1 - lp2)
+                    tmp[i] = lp2
+                    sum += (lp2 * lp2).toDouble()
                 }
                 val rms = Math.sqrt(sum / cnt).toFloat()
+                nf = if (rms < nf) nf * 0.9f + rms * 0.1f else nf * 1.0001f
+                if (nf < 4f) nf = 4f
+                if (nf > 400f) nf = 400f
+                val speech = rms > maxOf(nf * 1.8f, 30f)
                 var tg = gain
-                if (rms > gate) {
+                if (speech) {
                     val want = (target / rms).coerceIn(1.0f, maxGain)
-                    tg = if (want < gain) gain + (want - gain) * 0.6f else gain + (want - gain) * 0.06f
+                    tg = if (want < gain) gain + (want - gain) * 0.6f else gain + (want - gain) * 0.05f
                 }
+                val attTarget = if (speech) 1.0f else 0.35f
+                val a0 = att
+                val a1 = a0 + (attTarget - a0) * (if (attTarget > a0) 0.5f else 0.05f)
                 val g0 = gain
                 for (i in 0 until cnt) {
-                    val g = g0 + (tg - g0) * (i + 1) / cnt
+                    val g = (g0 + (tg - g0) * (i + 1) / cnt) * (a0 + (a1 - a0) * (i + 1) / cnt)
                     var y = tmp[i] * g
                     val ay = abs(y)
                     if (ay > 24000f) {
@@ -232,6 +251,7 @@ class RecorderService : Service() {
                     b[idx + 1] = ((v shr 8) and 0xFF).toByte()
                 }
                 gain = tg
+                att = a1
                 s += cnt
             }
         }
@@ -266,7 +286,7 @@ class RecorderService : Service() {
 
     private fun runLocal() {
         val probes = mutableListOf<Probe>()
-        val agc = if (boost) Agc() else null
+        val agc = if (boostLevel > 0) Agc(boostLevel) else null
         try {
             val rate = 16000
             val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
