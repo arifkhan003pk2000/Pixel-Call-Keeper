@@ -192,9 +192,6 @@ class MainActivity : Activity() {
         return row
     }
 
-    private fun boostLabel() =
-        "WhatsApp awaaz tez karna: ${RecorderService.boostNames[RecorderService.boostLevel]}   (badalne ke liye dabayein)"
-
     private fun setTab(t: String) {
         tab = t
         navButtons.forEach { (k, b) ->
@@ -326,19 +323,14 @@ class MainActivity : Activity() {
             isChecked = RecorderService.auto
             setOnCheckedChangeListener { _, c -> RecorderService.setAuto(this@MainActivity, c) }
         }
-        var bb: Button? = null
-        bb = ghostBtn(boostLabel()) {
-            RecorderService.cycleBoost(this@MainActivity)
-            bb?.text = boostLabel()
-        }
         screen(
             tv("PixelCall Keeper", 28f, Color.WHITE, true),
             tv("Private recordings, aapke phone par", 14f, cMuted),
             card(statusRow, noteView!!, waView!!),
             card(sw),
-            toggleBtn!!, voipBtn!!, bb!!,
+            toggleBtn!!, voipBtn!!,
             tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
-               "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par samne wale ki awaaz halki aati hai, upar wala switch ON rakhein.", 12f, cMuted)
+               "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par awaaz khud-ba-khud adjust hoti hai.", 12f, cMuted)
                 .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) }
         )
         refreshHome()
