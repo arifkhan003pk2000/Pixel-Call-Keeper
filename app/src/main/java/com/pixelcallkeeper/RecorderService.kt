@@ -44,6 +44,7 @@ class RecorderService : Service() {
         @Volatile var lastError: String? = null
         @Volatile var info: String? = null
         @Volatile var auto = true
+        @Volatile var boost = true
         @Volatile private var instance: RecorderService? = null
 
         fun dir(ctx: Context): File =
@@ -55,6 +56,11 @@ class RecorderService : Service() {
         fun setAuto(ctx: Context, v: Boolean) {
             auto = v
             ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("auto", v).apply()
+        }
+
+        fun setBoost(ctx: Context, v: Boolean) {
+            boost = v
+            ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("boost", v).apply()
         }
 
         fun toggleManual(source: Int = 4) { instance?.manualToggle(source) }
@@ -92,6 +98,7 @@ class RecorderService : Service() {
             serviceUp = true
             instance = this
             auto = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("auto", true)
+            boost = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("boost", true)
             Thread { serverLoop() }.start()
             Thread { monitor() }.start()
         }
@@ -259,7 +266,7 @@ class RecorderService : Service() {
 
     private fun runLocal() {
         val probes = mutableListOf<Probe>()
-        val agc = Agc()
+        val agc: Agc? = if (boost) Agc() else null
         try {
             val rate = 16000
             val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)

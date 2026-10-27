@@ -323,16 +323,23 @@ class MainActivity : Activity() {
             isChecked = RecorderService.auto
             setOnCheckedChangeListener { _, c -> RecorderService.setAuto(this@MainActivity, c) }
         }
+        val sw2 = Switch(this).apply {
+            text = "WhatsApp: halki awaaz tez karein (kaan se lagane par)"
+            setTextColor(Color.WHITE)
+            isChecked = RecorderService.boost
+            setOnCheckedChangeListener { _, c -> RecorderService.setBoost(this@MainActivity, c) }
+        }
         screen(
             tv("PixelCall Keeper", 28f, Color.WHITE, true),
             tv("Private recordings, aapke phone par", 14f, cMuted),
             card(statusRow, noteView!!, waView!!),
             card(sw),
+            card(sw2),
             toggleBtn!!, voipBtn!!,
             tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
                "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par awaaz khud-ba-khud adjust hoti hai.", 12f, cMuted)
                 .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) },
-            tv("Build v7", 11f, cMuted)
+            tv("Build v9", 11f, cMuted)
         )
         refreshHome()
     }
