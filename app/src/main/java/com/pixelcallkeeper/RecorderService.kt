@@ -45,6 +45,7 @@ class RecorderService : Service() {
         @Volatile var info: String? = null
         @Volatile var auto = true
         @Volatile var boost = true
+        @Volatile var autoDownload = false
         @Volatile private var instance: RecorderService? = null
 
         fun dir(ctx: Context): File =
@@ -61,6 +62,11 @@ class RecorderService : Service() {
         fun setBoost(ctx: Context, v: Boolean) {
             boost = v
             ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("boost", v).apply()
+        }
+
+        fun setAutoDownload(ctx: Context, v: Boolean) {
+            autoDownload = v
+            ctx.getSharedPreferences("pck", Context.MODE_PRIVATE).edit().putBoolean("autodl", v).apply()
         }
 
         fun toggleManual(source: Int = 4) { instance?.manualToggle(source) }
@@ -99,6 +105,7 @@ class RecorderService : Service() {
             instance = this
             auto = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("auto", true)
             boost = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("boost", true)
+            autoDownload = getSharedPreferences("pck", Context.MODE_PRIVATE).getBoolean("autodl", false)
             Thread { serverLoop() }.start()
             Thread { monitor() }.start()
         }
@@ -458,6 +465,16 @@ class RecorderService : Service() {
                 val dest = File(File(dir(this), cleanName(person)), type).apply { mkdirs() }
                 val target = File(dest, f.name)
                 if (!f.renameTo(target)) { f.copyTo(target, true); f.delete() }
+                // chhoti m4a file (awaaz wahi, MB kam)
+                var finalFile = target
+                val m4a = File(dest, target.nameWithoutExtension + ".m4a")
+                if (AacEncoder.encode(target, m4a) && m4a.length() > 1000) {
+                    target.delete()
+                    finalFile = m4a
+                } else {
+                    m4a.delete()
+                }
+                if (autoDownload) Exporter.toDownloads(this, finalFile, dir(this))
             } catch (e: Exception) {
                 lastError = "Folder: ${e.message}"
             }

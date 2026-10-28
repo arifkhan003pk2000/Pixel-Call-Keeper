@@ -339,7 +339,7 @@ class MainActivity : Activity() {
             tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
                "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par awaaz khud-ba-khud adjust hoti hai.", 12f, cMuted)
                 .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) },
-            tv("Build v9", 11f, cMuted)
+            tv("Build v10", 11f, cMuted)
         )
         refreshHome()
     }
@@ -561,10 +561,7 @@ class MainActivity : Activity() {
                 lastDay = day
                 views += tv(dayLabel(day), 14f, cCyan, true).apply { setPadding(dp(4), dp(18), dp(4), dp(2)) }
             }
-            val dur = if (f.extension == "wav" && f.length() > 44) {
-                val s = (f.length() - 44) / 32000
-                "  •  %d:%02d".format(s / 60, s % 60)
-            } else ""
+            val dur = durText(f) + "  •  " + sizeText(f)
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             val play = listBtn((if (playingFile == f) "■  " else "▶  ") + t12(f.name) + dur) { play(f, crumb) }
             play.layoutParams = LinearLayout.LayoutParams(0, dp(56), 1f).apply { topMargin = dp(8) }
@@ -588,8 +585,8 @@ class MainActivity : Activity() {
     // ---------- Menus ----------
     private fun personMenu(p: Person) {
         AlertDialog.Builder(this).setTitle(p.label)
-            .setItems(arrayOf("Naam badlein (jaise unknown number ko naam dena)", "Poora folder delete")) { _, which ->
-                if (which == 0) renamePerson(p) else confirmDeletePerson(p)
+            .setItems(arrayOf("Naam badlein (jaise unknown number ko naam dena)", "Poora folder Downloads mein save karein", "Poora folder delete")) { _, which ->
+                when (which) { 0 -> renamePerson(p); 1 -> saveFolderDl(p); else -> confirmDeletePerson(p) }
             }.show()
     }
 
@@ -621,9 +618,17 @@ class MainActivity : Activity() {
     }
 
     private fun fileMenu(f: File) {
+        val items = mutableListOf("Share", "Downloads mein save karein", "Dusre naam / folder mein bhejein", "Delete")
+        if (f.extension == "wav") items.add("Chhoti file (m4a) banayein")
         AlertDialog.Builder(this).setTitle(dt12(f.name))
-            .setItems(arrayOf("Share", "Dusre naam / folder mein bhejein", "Delete")) { _, which ->
-                when (which) { 0 -> share(f); 1 -> moveDialog(f); else -> confirmDelete(f) }
+            .setItems(items.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> share(f)
+                    1 -> saveDl(f)
+                    2 -> moveDialog(f)
+                    3 -> confirmDelete(f)
+                    else -> compressOne(f)
+                }
             }.show()
     }
 
@@ -654,14 +659,110 @@ class MainActivity : Activity() {
             .setNegativeButton("Cancel", null).show()
     }
 
+    // ---------- compress / downloads ----------
+    private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+
+    private fun sizeText(f: File): String =
+        if (f.length() >= 1048576) "%.1f MB".format(f.length() / 1048576.0) else "${f.length() / 1024} KB"
+
+    private val durCache = HashMap<String, Long>()
+    private fun durText(f: File): String {
+        val key = f.absolutePath + f.length()
+        val sec = durCache.getOrPut(key) {
+            if (f.extension == "wav") maxOf(0L, (f.length() - 44) / 32000)
+            else try {
+                val r = android.media.MediaMetadataRetriever()
+                r.setDataSource(f.absolutePath)
+                val ms = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                r.release()
+                ms / 1000
+            } catch (_: Exception) { 0L }
+        }
+        return if (sec > 0) "  •  %d:%02d".format(sec / 60, sec % 60) else ""
+    }
+
+    private fun compressFile(f: File): File? {
+        val m4a = File(f.parentFile, f.nameWithoutExtension + ".m4a")
+        return if (AacEncoder.encode(f, m4a) && m4a.length() > 1000) {
+            runOnUiThread { if (playingFile == f) stopPlayback() }
+            f.delete()
+            m4a
+        } else {
+            m4a.delete()
+            null
+        }
+    }
+
+    private fun compressOne(f: File) {
+        toast("File chhoti ki ja rahi hai...")
+        Thread {
+            val before = f.length()
+            val r = compressFile(f)
+            toast(if (r != null) "Ho gaya: ${"%.1f".format(before / 1048576.0)} MB se ${sizeText(r)}" else "Chhoti nahi ho saki")
+            runOnUiThread { refreshList() }
+        }.start()
+    }
+
+    private fun compressAll() {
+        toast("Purani WAV files chhoti ki ja rahi hain...")
+        Thread {
+            val list = allAudio(baseDir()).filter { it.extension == "wav" }.toList()
+            var saved = 0L
+            var n = 0
+            list.forEach { f ->
+                val before = f.length()
+                val r = compressFile(f)
+                if (r != null) { n++; saved += before - r.length() }
+            }
+            toast("$n files chhoti hui, ${"%.1f".format(saved / 1048576.0)} MB bach gaye")
+            runOnUiThread { refreshList() }
+        }.start()
+    }
+
+    private fun saveDl(f: File) {
+        Thread {
+            val ok = Exporter.toDownloads(this, f, baseDir())
+            toast(if (ok) "Downloads/PixelCallKeeper mein save ho gayi" else "Save nahi ho saki")
+        }.start()
+    }
+
+    private fun saveAllDl() {
+        toast("Downloads mein save ho rahi hain...")
+        Thread {
+            val base = baseDir()
+            val n = allAudio(base).count { Exporter.toDownloads(this, it, base) }
+            toast("$n recordings Downloads/PixelCallKeeper mein save hui")
+        }.start()
+    }
+
+    private fun saveFolderDl(p: Person) {
+        Thread {
+            val base = baseDir()
+            val n = allAudio(p.dir).count { Exporter.toDownloads(this, it, base) }
+            toast("$n recordings Downloads/PixelCallKeeper mein save hui")
+        }.start()
+    }
+
     // ---------- Share ----------
     private fun share(f: File) {
+        if (f.extension == "wav") {
+            toast("File chhoti ki ja rahi hai, phir share hogi...")
+            Thread {
+                val m = compressFile(f)
+                runOnUiThread { refreshList(); doShare(m ?: f) }
+            }.start()
+            return
+        }
+        doShare(f)
+    }
+
+    private fun doShare(f: File) {
         try {
             val b = Uri.Builder().scheme("content").authority(ShareProvider.AUTH)
             f.relativeTo(baseDir()).path.split(File.separatorChar).forEach { b.appendPath(it) }
             val uri = b.build()
             val i = Intent(Intent.ACTION_SEND).apply {
-                type = "audio/*"
+                type = Exporter.mime(f)
                 putExtra(Intent.EXTRA_STREAM, uri)
                 clipData = ClipData.newRawUri("", uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -782,6 +883,18 @@ class MainActivity : Activity() {
                     cm.setPrimaryClip(ClipData.newPlainText("cmd", helperCmd))
                     Toast.makeText(this, "Copy ho gaya", Toast.LENGTH_SHORT).show()
                 }
+            ),
+            card(
+                tv("Storage / Downloads", 16f, Color.WHITE, true),
+                tv("Nayi recordings chhoti m4a file mein save hoti hain (MB kam, awaaz wahi).", 12f, cMuted),
+                Switch(this).apply {
+                    text = "Nayi recordings Downloads mein bhi save hon"
+                    setTextColor(Color.WHITE)
+                    isChecked = RecorderService.autoDownload
+                    setOnCheckedChangeListener { _, c -> RecorderService.setAutoDownload(this@MainActivity, c) }
+                },
+                ghostBtn("Purani saari WAV ko chhota (m4a) karein") { compressAll() },
+                ghostBtn("Saari recordings Downloads mein save karein") { saveAllDl() }
             ),
             card(
                 tv("Zaroori", 16f, Color.WHITE, true),

@@ -55,7 +55,8 @@ class ShareProvider : ContentProvider() {
         return c
     }
 
-    override fun getType(uri: Uri): String = "audio/wav"
+    override fun getType(uri: Uri): String =
+        if (uri.path?.endsWith(".m4a") == true) "audio/mp4" else "audio/wav"
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<String>?): Int = 0
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<String>?): Int = 0
