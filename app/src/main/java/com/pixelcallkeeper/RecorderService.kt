@@ -439,6 +439,15 @@ class RecorderService : Service() {
     private fun fileAway(f: File, src: Int, start: Long) {
         Thread {
             try {
+                // sab se pehle chhoti m4a banayein, taake bhari WAV kabhi list mein na dikhe
+                var work = f
+                val m4aTmp = File(f.parentFile, f.nameWithoutExtension + ".m4a")
+                if (AacEncoder.encode(f, m4aTmp) && m4aTmp.length() > 1000) {
+                    f.delete()
+                    work = m4aTmp
+                } else {
+                    m4aTmp.delete()
+                }
                 var person = "Unknown"
                 var type = "Phone Calls"
                 if (src == 4) {
@@ -463,18 +472,9 @@ class RecorderService : Service() {
                     person = if (nm.isNotBlank()) nm else "Unknown"
                 }
                 val dest = File(File(dir(this), cleanName(person)), type).apply { mkdirs() }
-                val target = File(dest, f.name)
-                if (!f.renameTo(target)) { f.copyTo(target, true); f.delete() }
-                // chhoti m4a file (awaaz wahi, MB kam)
-                var finalFile = target
-                val m4a = File(dest, target.nameWithoutExtension + ".m4a")
-                if (AacEncoder.encode(target, m4a) && m4a.length() > 1000) {
-                    target.delete()
-                    finalFile = m4a
-                } else {
-                    m4a.delete()
-                }
-                if (autoDownload) Exporter.toDownloads(this, finalFile, dir(this))
+                val target = File(dest, work.name)
+                if (!work.renameTo(target)) { work.copyTo(target, true); work.delete() }
+                if (autoDownload) Exporter.toDownloads(this, target, dir(this))
             } catch (e: Exception) {
                 lastError = "Folder: ${e.message}"
             }

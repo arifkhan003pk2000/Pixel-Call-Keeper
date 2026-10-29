@@ -339,7 +339,7 @@ class MainActivity : Activity() {
             tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
                "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par awaaz khud-ba-khud adjust hoti hai.", 12f, cMuted)
                 .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) },
-            tv("Build v10", 11f, cMuted)
+            tv("Build v11", 11f, cMuted)
         )
         refreshHome()
     }
@@ -585,8 +585,18 @@ class MainActivity : Activity() {
     // ---------- Menus ----------
     private fun personMenu(p: Person) {
         AlertDialog.Builder(this).setTitle(p.label)
-            .setItems(arrayOf("Naam badlein (jaise unknown number ko naam dena)", "Poora folder Downloads mein save karein", "Poora folder delete")) { _, which ->
-                when (which) { 0 -> renamePerson(p); 1 -> saveFolderDl(p); else -> confirmDeletePerson(p) }
+            .setItems(arrayOf(
+                "Naam badlein (jaise unknown number ko naam dena)",
+                "Poora folder Downloads mein bhejein (app se hata kar)",
+                "Poora folder Downloads mein copy karein",
+                "Poora folder delete"
+            )) { _, which ->
+                when (which) {
+                    0 -> renamePerson(p)
+                    1 -> saveFolderDl(p, true)
+                    2 -> saveFolderDl(p, false)
+                    else -> confirmDeletePerson(p)
+                }
             }.show()
     }
 
@@ -618,15 +628,22 @@ class MainActivity : Activity() {
     }
 
     private fun fileMenu(f: File) {
-        val items = mutableListOf("Share", "Downloads mein save karein", "Dusre naam / folder mein bhejein", "Delete")
+        val items = mutableListOf(
+            "Share",
+            "Downloads mein bhejein (app se hata kar)",
+            "Downloads mein copy karein (app mein bhi rahe)",
+            "Dusre naam / folder mein bhejein",
+            "Delete"
+        )
         if (f.extension == "wav") items.add("Chhoti file (m4a) banayein")
         AlertDialog.Builder(this).setTitle(dt12(f.name))
             .setItems(items.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> share(f)
-                    1 -> saveDl(f)
-                    2 -> moveDialog(f)
-                    3 -> confirmDelete(f)
+                    1 -> saveDl(f, true)
+                    2 -> saveDl(f, false)
+                    3 -> moveDialog(f)
+                    4 -> confirmDelete(f)
                     else -> compressOne(f)
                 }
             }.show()
@@ -719,29 +736,43 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun saveDl(f: File) {
+    private fun pruneEmpty(d: File?) {
+        var cur = d
+        val base = baseDir()
+        while (cur != null && cur != base && cur.isDirectory && cur.listFiles()?.isEmpty() == true) {
+            val parent = cur.parentFile
+            cur.delete()
+            cur = parent
+        }
+    }
+
+    // move=true: file sirf Downloads mein rahegi (app se hat jayegi). move=false: dono jagah.
+    private fun saveFiles(files: List<File>, move: Boolean) {
+        if (move) runOnUiThread { stopPlayback() }
         Thread {
-            val ok = Exporter.toDownloads(this, f, baseDir())
-            toast(if (ok) "Downloads/PixelCallKeeper mein save ho gayi" else "Save nahi ho saki")
+            val base = baseDir()
+            var n = 0
+            files.forEach { f ->
+                val parent = f.parentFile
+                if (Exporter.toDownloads(this, f, base)) {
+                    n++
+                    if (move) { f.delete(); pruneEmpty(parent) }
+                }
+            }
+            toast(
+                if (n == 0) "Save nahi ho saki"
+                else if (move) "$n recording Downloads/PixelCallKeeper mein chali gayi (app se hata di)"
+                else "$n recording Downloads/PixelCallKeeper mein copy ho gayi"
+            )
+            runOnUiThread { refreshList() }
         }.start()
     }
 
-    private fun saveAllDl() {
-        toast("Downloads mein save ho rahi hain...")
-        Thread {
-            val base = baseDir()
-            val n = allAudio(base).count { Exporter.toDownloads(this, it, base) }
-            toast("$n recordings Downloads/PixelCallKeeper mein save hui")
-        }.start()
-    }
+    private fun saveDl(f: File, move: Boolean) = saveFiles(listOf(f), move)
 
-    private fun saveFolderDl(p: Person) {
-        Thread {
-            val base = baseDir()
-            val n = allAudio(p.dir).count { Exporter.toDownloads(this, it, base) }
-            toast("$n recordings Downloads/PixelCallKeeper mein save hui")
-        }.start()
-    }
+    private fun saveAllDl(move: Boolean) = saveFiles(allAudio(baseDir()).toList(), move)
+
+    private fun saveFolderDl(p: Person, move: Boolean) = saveFiles(allAudio(p.dir).toList(), move)
 
     // ---------- Share ----------
     private fun share(f: File) {
@@ -888,13 +919,14 @@ class MainActivity : Activity() {
                 tv("Storage / Downloads", 16f, Color.WHITE, true),
                 tv("Nayi recordings chhoti m4a file mein save hoti hain (MB kam, awaaz wahi).", 12f, cMuted),
                 Switch(this).apply {
-                    text = "Nayi recordings Downloads mein bhi save hon"
+                    text = "Nayi recordings Downloads mein bhi copy hon (do jagah rahengi)"
                     setTextColor(Color.WHITE)
                     isChecked = RecorderService.autoDownload
                     setOnCheckedChangeListener { _, c -> RecorderService.setAutoDownload(this@MainActivity, c) }
                 },
                 ghostBtn("Purani saari WAV ko chhota (m4a) karein") { compressAll() },
-                ghostBtn("Saari recordings Downloads mein save karein") { saveAllDl() }
+                ghostBtn("Saari recordings Downloads mein bhejein (app se hata kar)") { saveAllDl(true) },
+                ghostBtn("Saari recordings Downloads mein copy karein") { saveAllDl(false) }
             ),
             card(
                 tv("Zaroori", 16f, Color.WHITE, true),
