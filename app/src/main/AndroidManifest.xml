@@ -9,8 +9,6 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <application
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
         android:label="PixelCall Keeper"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
