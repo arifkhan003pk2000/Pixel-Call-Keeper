@@ -12,8 +12,10 @@ import android.content.pm.ServiceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaScannerConnection
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.os.IBinder
 import android.provider.CallLog
@@ -48,8 +50,42 @@ class RecorderService : Service() {
         @Volatile var autoDownload = false
         @Volatile private var instance: RecorderService? = null
 
-        fun dir(ctx: Context): File =
+        fun storageOk(): Boolean = Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()
+
+        fun privateDir(ctx: Context): File =
             File(ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "PixelCallKeeper").apply { mkdirs() }
+
+        // Recordings ka asli ghar: Download/PixelCallKeeper (All files access ON ho to), warna app ke andar
+        fun dir(ctx: Context): File {
+            if (storageOk()) {
+                @Suppress("DEPRECATION")
+                val d = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "PixelCallKeeper")
+                if (d.isDirectory || d.mkdirs()) return d
+            }
+            return privateDir(ctx)
+        }
+
+        // Purani recordings (app ke andar) ko Download folder mein le jata hai
+        fun migrateToPublic(ctx: Context): Int {
+            if (!storageOk()) return 0
+            val src = privateDir(ctx)
+            val dst = dir(ctx)
+            if (src.canonicalPath == dst.canonicalPath) return 0
+            var n = 0
+            src.walkTopDown().filter { it.isFile }.toList().forEach { f ->
+                val rel = f.relativeTo(src).path
+                if (rel.startsWith("_new")) return@forEach
+                val t = File(dst, rel)
+                t.parentFile?.mkdirs()
+                try {
+                    if (!t.exists()) { f.copyTo(t); f.delete(); n++ }
+                } catch (_: Exception) {}
+            }
+            src.walkBottomUp().toList().forEach {
+                if (it != src && it.isDirectory && it.listFiles()?.isEmpty() == true) it.delete()
+            }
+            return n
+        }
 
         fun cleanName(s: String): String =
             s.replace(Regex("[\\\\/:*?\"<>|]"), "").trim().ifEmpty { "Unknown" }
@@ -474,7 +510,7 @@ class RecorderService : Service() {
                 val dest = File(File(dir(this), cleanName(person)), type).apply { mkdirs() }
                 val target = File(dest, work.name)
                 if (!work.renameTo(target)) { work.copyTo(target, true); work.delete() }
-                if (autoDownload) Exporter.toDownloads(this, target, dir(this))
+                try { MediaScannerConnection.scanFile(this, arrayOf(target.absolutePath), null, null) } catch (_: Exception) {}
             } catch (e: Exception) {
                 lastError = "Folder: ${e.message}"
             }

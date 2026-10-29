@@ -271,7 +271,20 @@ class MainActivity : Activity() {
         showHome()
     }
 
-    override fun onResume() { super.onResume(); handler.post(ticker) }
+    override fun onResume() {
+        super.onResume()
+        handler.post(ticker)
+        if (storageOk()) {
+            Thread {
+                val n = RecorderService.migrateToPublic(this)
+                if (n > 0) {
+                    toast("$n recording Download/PixelCallKeeper mein shift ho gayi")
+                    runOnUiThread { refreshList() }
+                }
+            }.start()
+        }
+        if (tab == "home") showHome()
+    }
     override fun onPause() { handler.removeCallbacks(ticker); super.onPause() }
     override fun onDestroy() { stopPlayback(); super.onDestroy() }
 
@@ -332,6 +345,7 @@ class MainActivity : Activity() {
         screen(
             tv("PixelCall Keeper", 28f, Color.WHITE, true),
             tv("Private recordings, aapke phone par", 14f, cMuted),
+            *storageCard(),
             card(statusRow, noteView!!, waView!!),
             card(sw),
             card(sw2),
@@ -339,7 +353,7 @@ class MainActivity : Activity() {
             tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
                "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par awaaz khud-ba-khud adjust hoti hai.", 12f, cMuted)
                 .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) },
-            tv("Build v11", 11f, cMuted)
+            tv("Build v12", 11f, cMuted)
         )
         refreshHome()
     }
@@ -585,18 +599,8 @@ class MainActivity : Activity() {
     // ---------- Menus ----------
     private fun personMenu(p: Person) {
         AlertDialog.Builder(this).setTitle(p.label)
-            .setItems(arrayOf(
-                "Naam badlein (jaise unknown number ko naam dena)",
-                "Poora folder Downloads mein bhejein (app se hata kar)",
-                "Poora folder Downloads mein copy karein",
-                "Poora folder delete"
-            )) { _, which ->
-                when (which) {
-                    0 -> renamePerson(p)
-                    1 -> saveFolderDl(p, true)
-                    2 -> saveFolderDl(p, false)
-                    else -> confirmDeletePerson(p)
-                }
+            .setItems(arrayOf("Naam badlein (jaise unknown number ko naam dena)", "Poora folder delete")) { _, which ->
+                if (which == 0) renamePerson(p) else confirmDeletePerson(p)
             }.show()
     }
 
@@ -628,22 +632,14 @@ class MainActivity : Activity() {
     }
 
     private fun fileMenu(f: File) {
-        val items = mutableListOf(
-            "Share",
-            "Downloads mein bhejein (app se hata kar)",
-            "Downloads mein copy karein (app mein bhi rahe)",
-            "Dusre naam / folder mein bhejein",
-            "Delete"
-        )
+        val items = mutableListOf("Share", "Dusre naam / folder mein bhejein", "Delete")
         if (f.extension == "wav") items.add("Chhoti file (m4a) banayein")
         AlertDialog.Builder(this).setTitle(dt12(f.name))
             .setItems(items.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> share(f)
-                    1 -> saveDl(f, true)
-                    2 -> saveDl(f, false)
-                    3 -> moveDialog(f)
-                    4 -> confirmDelete(f)
+                    1 -> moveDialog(f)
+                    2 -> confirmDelete(f)
                     else -> compressOne(f)
                 }
             }.show()
@@ -675,6 +671,26 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancel", null).show()
     }
+
+    // ---------- storage ----------
+    private fun storageOk() = RecorderService.storageOk()
+
+    private fun openAllFiles() {
+        if (Build.VERSION.SDK_INT < 30) return
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+        } catch (_: Exception) {
+            try { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) } catch (_: Exception) {}
+        }
+    }
+
+    private fun storageCard(): Array<View> =
+        if (storageOk()) emptyArray<View>()
+        else arrayOf<View>(card(
+            tv("Recordings Download folder mein save karne ke liye", 14f, Color.WHITE, true),
+            tv("'All files access' ON karein. Phir recordings Download/PixelCallKeeper mein naam, type aur tareekh ke hisaab se save hongi, aur app mein bhi dikhengi. Purani recordings khud wahan shift ho jayengi.", 12f, cMuted),
+            btn("All files access dein") { openAllFiles() }
+        ))
 
     // ---------- compress / downloads ----------
     private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
@@ -916,17 +932,14 @@ class MainActivity : Activity() {
                 }
             ),
             card(
-                tv("Storage / Downloads", 16f, Color.WHITE, true),
-                tv("Nayi recordings chhoti m4a file mein save hoti hain (MB kam, awaaz wahi).", 12f, cMuted),
-                Switch(this).apply {
-                    text = "Nayi recordings Downloads mein bhi copy hon (do jagah rahengi)"
-                    setTextColor(Color.WHITE)
-                    isChecked = RecorderService.autoDownload
-                    setOnCheckedChangeListener { _, c -> RecorderService.setAutoDownload(this@MainActivity, c) }
-                },
-                ghostBtn("Purani saari WAV ko chhota (m4a) karein") { compressAll() },
-                ghostBtn("Saari recordings Downloads mein bhejein (app se hata kar)") { saveAllDl(true) },
-                ghostBtn("Saari recordings Downloads mein copy karein") { saveAllDl(false) }
+                tv("Storage", 16f, Color.WHITE, true),
+                tv(
+                    if (storageOk()) "Recordings yahan hain: Download/PixelCallKeeper  (naam > type > tareekh)  ✓"
+                    else "Abhi recordings app ke andar hain. Download folder ke liye 'All files access' dein.",
+                    12f, if (storageOk()) cGreen else cOrange
+                ),
+                ghostBtn("All files access settings kholen") { openAllFiles() },
+                ghostBtn("Purani saari WAV ko chhota (m4a) karein") { compressAll() }
             ),
             card(
                 tv("Zaroori", 16f, Color.WHITE, true),
