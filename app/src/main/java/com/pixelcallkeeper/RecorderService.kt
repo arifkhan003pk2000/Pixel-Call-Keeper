@@ -48,6 +48,7 @@ class RecorderService : Service() {
         @Volatile var auto = true
         @Volatile var boost = true
         @Volatile var autoDownload = false
+        @Volatile var changeCount = 0
         @Volatile private var instance: RecorderService? = null
 
         fun storageOk(): Boolean = Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()
@@ -511,6 +512,7 @@ class RecorderService : Service() {
                 val target = File(dest, work.name)
                 if (!work.renameTo(target)) { work.copyTo(target, true); work.delete() }
                 try { MediaScannerConnection.scanFile(this, arrayOf(target.absolutePath), null, null) } catch (_: Exception) {}
+                changeCount++
             } catch (e: Exception) {
                 lastError = "Folder: ${e.message}"
             }

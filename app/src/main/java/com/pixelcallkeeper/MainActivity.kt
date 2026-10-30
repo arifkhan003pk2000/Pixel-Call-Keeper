@@ -31,6 +31,14 @@ import java.util.Locale
 
 private data class Person(val label: String, val dir: File, val legacy: Boolean)
 
+private class Snap(
+    val persons: List<Person>,
+    val typesOf: Map<String, List<Pair<String, File>>>,
+    val filesOf: Map<String, List<File>>,
+    val allOf: Map<String, List<File>>,
+    val sizeOf: Map<String, Long>
+)
+
 class MainActivity : Activity() {
 
     private val cBg = Color.parseColor("#0E0607")
@@ -59,6 +67,10 @@ class MainActivity : Activity() {
     private var recTypeDir: File? = null
     private var recTypeName = ""
     private var tab = "home"
+    private var snap: Snap? = null
+    private var dirty = true
+    private var scanning = false
+    private var seenChange = 0
     private val handler = Handler(Looper.getMainLooper())
     private var statusView: TextView? = null
     private var noteView: TextView? = null
@@ -68,7 +80,7 @@ class MainActivity : Activity() {
     private var voipBtn: Button? = null
 
     private val ticker = object : Runnable {
-        override fun run() { ensureService(); refreshHome(); handler.postDelayed(this, 1000) }
+        override fun run() { ensureService(); refreshHome(); checkChange(); handler.postDelayed(this, 1000) }
     }
     private val playTick = object : Runnable {
         override fun run() {
@@ -274,12 +286,14 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         handler.post(ticker)
+        dirty = true
+        if (!scanning) scanAsync()
         if (storageOk()) {
             Thread {
                 val n = RecorderService.migrateToPublic(this)
                 if (n > 0) {
                     toast("$n recording Download/PixelCallKeeper mein shift ho gayi")
-                    runOnUiThread { refreshList() }
+                    runOnUiThread { changed() }
                 }
             }.start()
         }
@@ -313,6 +327,17 @@ class MainActivity : Activity() {
     }
 
     private fun refreshList() { if (tab == "rec") showRecordings() }
+    private fun changed() { dirty = true; refreshList() }
+
+    private fun checkChange() {
+        val c = RecorderService.changeCount
+        if (c != seenChange) {
+            seenChange = c
+            dirty = true
+            if (tab == "rec" && recPerson == null && recTypeDir == null) showRecordings()
+            else if (!scanning) scanAsync()
+        }
+    }
 
     // ---------- Home ----------
     private fun showHome() {
@@ -353,7 +378,7 @@ class MainActivity : Activity() {
             tv("Normal phone call: kaan se lagake bhi record hoti hai.\n" +
                "WhatsApp / Instagram: speaker ON par sabse saaf. Kaan se lagane par awaaz khud-ba-khud adjust hoti hai.", 12f, cMuted)
                 .apply { setPadding(dp(4), dp(14), dp(4), dp(4)) },
-            tv("Build v12", 11f, cMuted)
+            tv("Build v13", 11f, cMuted)
         )
         refreshHome()
     }
@@ -413,20 +438,80 @@ class MainActivity : Activity() {
     // ---------- Folder helpers ----------
     private fun baseDir() = RecorderService.dir(this)
 
-    private fun audioFiles(d: File): List<File> =
-        d.listFiles { f -> f.isFile && f.extension in audioExt }?.toList() ?: emptyList()
+    private fun audioFiles(d: File): List<File> = snap?.filesOf?.get(d.path) ?: emptyList()
 
-    private fun allAudio(d: File): Sequence<File> =
-        d.walkTopDown().filter { it.isFile && it.extension in audioExt }
+    private fun allAudio(d: File): Sequence<File> = (snap?.allOf?.get(d.path) ?: emptyList()).asSequence()
 
-    private fun persons(): List<Person> {
+    private fun persons(): List<Person> = snap?.persons ?: emptyList()
+
+    private fun lenOf(f: File): Long = snap?.sizeOf?.get(f.path) ?: f.length()
+
+    // poori recordings ki list ek baar (background mein) padhta hai
+    private fun buildSnap(): Snap {
         val base = baseDir()
-        val out = mutableListOf<Person>()
-        base.listFiles { f -> f.isDirectory }?.forEach { d ->
-            if (allAudio(d).any()) out += Person(if (d.name == "_new") "Unsorted" else d.name, d, false)
+        val persons = mutableListOf<Pair<Person, String>>()
+        val typesOf = HashMap<String, List<Pair<String, File>>>()
+        val filesOf = HashMap<String, List<File>>()
+        val allOf = HashMap<String, List<File>>()
+        val sizeOf = HashMap<String, Long>()
+        val everything = mutableListOf<File>()
+
+        fun audioIn(kids: Array<File>): List<File> {
+            val l = kids.filter { it.extension in audioExt }
+            l.forEach { sizeOf[it.path] = it.length() }
+            return l
         }
-        if (audioFiles(base).isNotEmpty()) out += Person("Purani recordings", base, true)
-        return out.sortedByDescending { p -> if (p.legacy) "" else (allAudio(p.dir).maxOfOrNull { it.name } ?: "") }
+
+        val top = base.listFiles() ?: emptyArray<File>()
+        val baseLoose = audioIn(top)
+        filesOf[base.path] = baseLoose
+        everything += baseLoose
+
+        for (d in top) {
+            if (!d.isDirectory) continue
+            val kids = d.listFiles() ?: emptyArray<File>()
+            val loose = audioIn(kids)
+            val tlist = mutableListOf<Pair<String, File>>()
+            val all = mutableListOf<File>()
+            for (x in kids) {
+                if (!x.isDirectory) continue
+                val fs = audioIn(x.listFiles() ?: emptyArray<File>())
+                if (fs.isNotEmpty()) {
+                    tlist += x.name to x
+                    filesOf[x.path] = fs
+                    all += fs
+                }
+            }
+            if (loose.isNotEmpty()) {
+                tlist += "Recordings" to d
+                filesOf[d.path] = loose
+                all += loose
+            }
+            if (all.isEmpty()) continue
+            typesOf[d.path] = tlist.sortedBy { typeOrder(it.first) }
+            allOf[d.path] = all
+            everything += all
+            val newest = all.maxOf { it.name }
+            persons += Person(if (d.name == "_new") "Unsorted" else d.name, d, false) to newest
+        }
+        allOf[base.path] = everything
+        val list = persons.sortedByDescending { it.second }.map { it.first }.toMutableList()
+        if (baseLoose.isNotEmpty()) list += Person("Purani recordings", base, true)
+        return Snap(list, typesOf, filesOf, allOf, sizeOf)
+    }
+
+    private fun scanAsync() {
+        scanning = true
+        dirty = false
+        Thread {
+            val sn = try { buildSnap() } catch (_: Exception) { null }
+            runOnUiThread {
+                if (sn != null) snap = sn
+                scanning = false
+                if (tab == "rec") renderRecordings()
+                if (dirty) scanAsync()
+            }
+        }.start()
     }
 
     private fun typeOrder(n: String) = when (n) {
@@ -440,14 +525,7 @@ class MainActivity : Activity() {
         else -> "🎙"
     }
 
-    private fun types(person: File): List<Pair<String, File>> {
-        val out = mutableListOf<Pair<String, File>>()
-        person.listFiles { f -> f.isDirectory }?.forEach { d ->
-            if (audioFiles(d).isNotEmpty()) out += d.name to d
-        }
-        if (audioFiles(person).isNotEmpty()) out += "Recordings" to person
-        return out.sortedBy { typeOrder(it.first) }
-    }
+    private fun types(person: File): List<Pair<String, File>> = snap?.typesOf?.get(person.path) ?: emptyList()
 
     private fun personLabel(): String = recPerson?.let { if (it.name == "_new") "Unsorted" else it.name } ?: ""
 
@@ -474,11 +552,24 @@ class MainActivity : Activity() {
     // ---------- Recordings screens ----------
     private fun showRecordings() {
         setTab("rec")
+        if (snap == null) {
+            screen(
+                tv("Recordings", 28f, Color.WHITE, true),
+                tv("Load ho rahi hain...", 14f, cMuted)
+            )
+        } else {
+            renderRecordings()
+        }
+        if (dirty && !scanning) scanAsync()
+    }
+
+    private fun renderRecordings() {
+        if (snap == null) return
         val td = recTypeDir
         if (td != null && audioFiles(td).isNotEmpty()) { showFiles(td); return }
         recTypeDir = null
         val p = recPerson
-        if (p != null && p.exists() && types(p).isNotEmpty()) { showTypes(p); return }
+        if (p != null && types(p).isNotEmpty()) { showTypes(p); return }
         recPerson = null
         showPersons()
     }
@@ -615,6 +706,7 @@ class MainActivity : Activity() {
                     else if (!p.dir.renameTo(target)) { p.dir.copyRecursively(target, false); p.dir.deleteRecursively() }
                 }
                 recPerson = null; recTypeDir = null
+                dirty = true
                 showRecordings()
             }
             .setNegativeButton("Cancel", null).show()
@@ -626,6 +718,7 @@ class MainActivity : Activity() {
             .setPositiveButton("Delete") { _, _ ->
                 stopPlayback(); p.dir.deleteRecursively()
                 recPerson = null; recTypeDir = null
+                dirty = true
                 showRecordings()
             }
             .setNegativeButton("Cancel", null).show()
@@ -658,6 +751,7 @@ class MainActivity : Activity() {
                 val target = File(dest, f.name)
                 if (!f.renameTo(target)) { f.copyTo(target, true); f.delete() }
                 recPerson = dest.parentFile; recTypeDir = dest; recTypeName = type
+                dirty = true
                 showRecordings()
             }
             .setNegativeButton("Cancel", null).show()
@@ -667,7 +761,7 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle("Delete karein?").setMessage(dt12(f.name))
             .setPositiveButton("Delete") { _, _ ->
                 if (playingFile == f) stopPlayback()
-                f.delete(); showRecordings()
+                f.delete(); dirty = true; showRecordings()
             }
             .setNegativeButton("Cancel", null).show()
     }
@@ -695,22 +789,15 @@ class MainActivity : Activity() {
     // ---------- compress / downloads ----------
     private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
 
-    private fun sizeText(f: File): String =
-        if (f.length() >= 1048576) "%.1f MB".format(f.length() / 1048576.0) else "${f.length() / 1024} KB"
+    private fun sizeText(f: File): String {
+        val n = lenOf(f)
+        return if (n >= 1048576) "%.1f MB".format(n / 1048576.0) else "${n / 1024} KB"
+    }
 
-    private val durCache = HashMap<String, Long>()
+    // m4a: 48 kbps ke hisaab se andaza (bina file kholay, tez)
     private fun durText(f: File): String {
-        val key = f.absolutePath + f.length()
-        val sec = durCache.getOrPut(key) {
-            if (f.extension == "wav") maxOf(0L, (f.length() - 44) / 32000)
-            else try {
-                val r = android.media.MediaMetadataRetriever()
-                r.setDataSource(f.absolutePath)
-                val ms = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-                r.release()
-                ms / 1000
-            } catch (_: Exception) { 0L }
-        }
+        val n = lenOf(f)
+        val sec = if (f.extension == "wav") maxOf(0L, (n - 44) / 32000) else n * 8 / 48000
         return if (sec > 0) "  •  %d:%02d".format(sec / 60, sec % 60) else ""
     }
 
@@ -732,7 +819,7 @@ class MainActivity : Activity() {
             val before = f.length()
             val r = compressFile(f)
             toast(if (r != null) "Ho gaya: ${"%.1f".format(before / 1048576.0)} MB se ${sizeText(r)}" else "Chhoti nahi ho saki")
-            runOnUiThread { refreshList() }
+            runOnUiThread { changed() }
         }.start()
     }
 
@@ -748,7 +835,7 @@ class MainActivity : Activity() {
                 if (r != null) { n++; saved += before - r.length() }
             }
             toast("$n files chhoti hui, ${"%.1f".format(saved / 1048576.0)} MB bach gaye")
-            runOnUiThread { refreshList() }
+            runOnUiThread { changed() }
         }.start()
     }
 
@@ -780,7 +867,7 @@ class MainActivity : Activity() {
                 else if (move) "$n recording Downloads/PixelCallKeeper mein chali gayi (app se hata di)"
                 else "$n recording Downloads/PixelCallKeeper mein copy ho gayi"
             )
-            runOnUiThread { refreshList() }
+            runOnUiThread { changed() }
         }.start()
     }
 
@@ -796,7 +883,7 @@ class MainActivity : Activity() {
             toast("File chhoti ki ja rahi hai, phir share hogi...")
             Thread {
                 val m = compressFile(f)
-                runOnUiThread { refreshList(); doShare(m ?: f) }
+                runOnUiThread { changed(); doShare(m ?: f) }
             }.start()
             return
         }
